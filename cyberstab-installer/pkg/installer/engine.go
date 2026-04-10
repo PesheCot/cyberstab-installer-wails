@@ -254,6 +254,7 @@ func (e *Engine) run() error {
 		// Set permissions for client folder IMMEDIATELY after copying
 		if runtime.GOOS == "windows" && e.Options.Components.InstallClients {
 			log.Printf("[INSTALL] Step 3.1: Setting client folder permissions...")
+			log.Printf("[INSTALL] InstallClients = true, dst = %s", dst)
 			if e.DeployProgressEmitter != nil {
 				e.DeployProgressEmitter(101, "Настройка прав доступа...")
 			}
@@ -263,6 +264,10 @@ func (e *Engine) run() error {
 			} else {
 				log.Printf("[INSTALL] Client permissions set successfully")
 			}
+			flushLog()
+		} else {
+			log.Printf("[INSTALL] Step 3.1: SKIPPED - InstallClients = %v", e.Options.Components.InstallClients)
+			flushLog()
 		}
 		
 		return nil
@@ -1029,7 +1034,7 @@ func readServerProperties(path string) map[string]string {
 	return props
 }
 
-// setClientFolderPermissionsWindows grants Read & Execute permissions to all users for the client folder.
+// setClientFolderPermissionsWindows grants Full Control permissions to all users for the client folder.
 // This ensures any user can launch the client, not just administrators.
 func setClientFolderPermissionsWindows(installDir string) error {
 	// Force flush logs before starting
@@ -1077,18 +1082,93 @@ func setClientFolderPermissionsWindows(installDir string) error {
 		log.Printf("[PERMS] [%d/%d] Processing: %s", i+1, len(clientDirs), clientDir)
 		flushLog()
 
-		// Grant Full Control to Everyone (all users can do anything with client folder)
-		// (OI)(CI) = Object/Container inherit (apply to all subfolders and files)
-		// F = Full Control
-		// /T = recursive
-		// /C = continue on error
-		log.Printf("[PERMS] [%d/%d] Granting Full Control to Everyone...", i+1, len(clientDirs))
-		cmd := exec.Command("icacls.exe", clientDir, "/grant:r", "Everyone:(OI)(CI)(F)", "/T", "/C")
-		err := runCmdWithOutputArgs(cmd, "[PERMS-EVERYONE]")
-		if err != nil {
-			log.Printf("[PERMS] [%d/%d] ERROR: Grant Everyone failed: %v", i+1, len(clientDirs), err)
+		// Method 1: Use PowerShell with Get-Acl/Set-Acl
+		log.Printf("[PERMS] [%d/%d] Method 1: Using PowerShell...", i+1, len(clientDirs))
+		
+		psScript := fmt.Sprintf(`
+			$ErrorActionPreference = "Continue"
+			$path = "%s"
+			
+			# Get current ACL
+			$acl = Get-Acl -Path $path
+			
+			# Create Full Control rule for Everyone
+			$everyone = New-Object System.Security.Principal.SecurityIdentifier("S-1-1-0")
+			$rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+				$everyone,
+				"FullControl",
+				"ContainerInherit,ObjectInherit",
+				"None",
+				"Allow"
+			)
+			
+			# Add the rule
+			$acl.SetAccessRule($rule)
+			
+			# Apply recursively
+			Set-Acl -Path $path -AclObject $acl -ErrorAction Continue
+			
+			# Also apply to all child items
+			Get-ChildItem -Path $path -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object {
+				try {
+					$itemAcl = Get-Acl -Path $_.FullName
+					$itemAcl.SetAccessRule($rule)
+					Set-Acl -Path $_.FullName -AclObject $itemAcl -ErrorAction Continue
+				} catch {
+					Write-Host "Warning: Could not set ACL on $($_.FullName): $_"
+				}
+			}
+			
+			Write-Host "Permissions set successfully"
+		`, clientDir)
+		
+		cmd := exec.Command("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", psScript)
+		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		var out bytes.Buffer
+		cmd.Stdout = &out
+		cmd.Stderr = &out
+		
+		if err := cmd.Run(); err != nil {
+			log.Printf("[PERMS] [%d/%d] PowerShell failed: %v", i+1, len(clientDirs), err)
+			if out.Len() > 0 {
+				log.Printf("[PERMS] [%d/%d] PowerShell output: %s", i+1, len(clientDirs), strings.TrimSpace(out.String()))
+			}
+			
+			// Method 2: Fallback to icacls.exe
+			log.Printf("[PERMS] [%d/%d] Method 2: Using icacls.exe fallback...", i+1, len(clientDirs))
+			cmd = exec.Command("icacls.exe", clientDir, "/grant:r", "Everyone:(OI)(CI)(F)", "/T", "/C")
+			cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+			out.Reset()
+			cmd.Stdout = &out
+			cmd.Stderr = &out
+			
+			if err := cmd.Run(); err != nil {
+				log.Printf("[PERMS] [%d/%d] ERROR: Both PowerShell and icacls failed", i+1, len(clientDirs))
+				if out.Len() > 0 {
+					log.Printf("[PERMS] [%d/%d] icacls stderr: %s", i+1, len(clientDirs), strings.TrimSpace(out.String()))
+				}
+			} else {
+				log.Printf("[PERMS] [%d/%d] Success via icacls.exe fallback", i+1, len(clientDirs))
+			}
 		} else {
-			log.Printf("[PERMS] [%d/%d] Successfully granted Full Control to Everyone", i+1, len(clientDirs))
+			log.Printf("[PERMS] [%d/%d] Success via PowerShell", i+1, len(clientDirs))
+			if out.Len() > 0 {
+				log.Printf("[PERMS] [%d/%d] PowerShell output: %s", i+1, len(clientDirs), strings.TrimSpace(out.String()))
+			}
+		}
+		
+		flushLog()
+
+		// Verify permissions
+		log.Printf("[PERMS] [%d/%d] Verifying permissions...", i+1, len(clientDirs))
+		cmd = exec.Command("icacls.exe", clientDir)
+		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		out.Reset()
+		cmd.Stdout = &out
+		cmd.Stderr = &out
+		_ = cmd.Run()
+		if out.Len() > 0 {
+			log.Printf("[PERMS] [%d/%d] Current ACL:\n%s", i+1, len(clientDirs), out.String())
 		}
 		flushLog()
 
