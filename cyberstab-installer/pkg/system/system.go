@@ -32,6 +32,34 @@ type ServerConsoleInfo struct {
 // NOTE: These names are project-specific; adjust if your scheduled task names differ.
 const scheduledTaskName = "CyberstabServer"
 
+func stopCyberstabWindowsBestEffort() {
+	if runtime.GOOS != "windows" {
+		return
+	}
+	// Stop scheduled task first (releases most file locks).
+	_, _ = runCmd(10*time.Second, "schtasks.exe", "/End", "/TN", scheduledTaskName)
+	time.Sleep(300 * time.Millisecond)
+
+	// Then kill known executables (best-effort).
+	_ = taskkillBestEffort("CyberstabServerWindows.exe")
+	_ = taskkillBestEffort("serverconsole.exe")
+	_ = taskkillBestEffort("CyberstabClientWindows.exe")
+	// Cyberstab uses Java; as last resort kill java.exe (may be too broad, but needed for uninstall).
+	_ = taskkillBestEffort("java.exe")
+	time.Sleep(500 * time.Millisecond)
+}
+
+func taskkillBestEffort(imageName string) error {
+	if runtime.GOOS != "windows" {
+		return nil
+	}
+	if strings.TrimSpace(imageName) == "" {
+		return nil
+	}
+	_, _ = runCmd(12*time.Second, "taskkill.exe", "/F", "/IM", imageName, "/T")
+	return nil
+}
+
 func QueryServerStatus() (ServerStatus, error) {
 	if runtime.GOOS != "windows" {
 		return ServerStatus{}, fmt.Errorf("unsupported OS")
@@ -88,9 +116,12 @@ func UninstallCyberstab(installDir string) (deferred bool, err error) {
 
 	// Windows-only cleanup (tasks, shortcuts, uninstall registry).
 	if runtime.GOOS == "windows" {
+		// If server is running, stop it first to avoid locked files and DB connections.
+		stopCyberstabWindowsBestEffort()
 		_ = removeCyberstabScheduledTasks()
 		_ = removeCyberstabShortcuts(installDir)
 		_ = removeCyberstabUninstallRegistry(installDir)
+		_ = removeCyberstabInstallerArtifactsWindows()
 	}
 
 	// Remove directory.
@@ -120,7 +151,25 @@ func UninstallCyberstab(installDir string) (deferred bool, err error) {
 	return true, fmt.Errorf("папка %s будет удалена после закрытия деинсталлятора", installDir)
 }
 
+func removeCyberstabInstallerArtifactsWindows() error {
+	// Best-effort cleanup of installer artifacts outside installDir:
+	// - WebView2 user data dir (created to avoid Edge "cannot read/write" when running elevated)
+	// - installer log files
+	base := os.Getenv("ProgramData")
+	if strings.TrimSpace(base) == "" {
+		base = `C:\ProgramData`
+	}
+	_ = os.RemoveAll(filepath.Join(base, "CyberstabInstaller"))
+	_ = os.Remove(filepath.Join(base, "cyberstab-installer.log"))
+	_ = os.Remove(filepath.Join(os.TempDir(), "cyberstab-installer.log"))
+	return nil
+}
+
 func removeCyberstabScheduledTasks() error {
+	// If task is running, stop it first.
+	_, _ = runCmd(10*time.Second, "schtasks.exe", "/End", "/TN", scheduledTaskName)
+	time.Sleep(200 * time.Millisecond)
+
 	// Delete the known task name first.
 	_, _ = runCmd(10*time.Second, "schtasks.exe", "/Delete", "/TN", scheduledTaskName, "/F")
 
@@ -217,11 +266,22 @@ func scheduleSelfDelete(pid int, exePath string, installDir string) error {
 	lines = append(lines, ":wait")
 	lines = append(lines, "tasklist /FI \"PID eq %PID%\" | find \"%PID%\" >nul")
 	lines = append(lines, "if %errorlevel%==0 (timeout /t 1 /nobreak >nul & goto wait)")
+	// Try hard to remove the install directory and the uninstaller exe.
+	// Important: even if the uninstaller lives inside installDir, installDir removal may partially fail.
+	// In that case we still want to explicitly delete exePath after the process exits.
 	if strings.TrimSpace(installDir) != "" {
 		lines = append(lines, "rmdir /S /Q "+q(installDir))
+		lines = append(lines, "timeout /t 1 /nobreak >nul")
+		// Second attempt sometimes succeeds after a short delay.
+		lines = append(lines, "rmdir /S /Q "+q(installDir))
 	}
-	if strings.TrimSpace(exePath) != "" && (strings.TrimSpace(installDir) == "" || !isPathUnder(exePath, installDir)) {
+	if strings.TrimSpace(exePath) != "" {
 		lines = append(lines, "del /F /Q "+q(exePath))
+		lines = append(lines, "timeout /t 1 /nobreak >nul")
+		// If the exe was inside installDir, retry directory removal after deleting the exe.
+		if strings.TrimSpace(installDir) != "" {
+			lines = append(lines, "rmdir /S /Q "+q(installDir))
+		}
 	}
 	lines = append(lines, "del /F /Q \"%~f0\"")
 	content := strings.Join(lines, "\r\n") + "\r\n"
@@ -257,7 +317,7 @@ func runCmd(timeout time.Duration, exe string, args ...string) (string, error) {
 			if msg == "" {
 				msg = err.Error()
 			}
-			return out, fmt.Errorf(msg)
+			return out, fmt.Errorf("%s", msg)
 		}
 		return out, nil
 	case <-time.After(timeout):

@@ -246,8 +246,11 @@ func findPostgresInstallerUnder(root string) string {
 }
 
 // LaunchClient opens the Cyberstab client executable.
-func (a *App) LaunchClient() error {
-	installDir := `C:\Program Files\Cyberstab`
+func (a *App) LaunchClient(installDir string) error {
+	installDir = strings.TrimSpace(installDir)
+	if installDir == "" {
+		installDir = `C:\Program Files\Cyberstab`
+	}
 	// Detect client dir based on architecture
 	clientDir := installer.DetectClientDirWindows(installDir)
 	if clientDir == "" {

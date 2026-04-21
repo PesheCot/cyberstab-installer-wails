@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"os"
@@ -414,11 +415,25 @@ func (e *Engine) run() error {
 					if e.ProgressEmitter != nil {
 						e.ProgressEmitter(96, "Ошибка запуска: " + err.Error())
 					}
+					return fmt.Errorf("не удалось запустить сервер: %w", err)
 				} else {
-					// Give it a moment to initialize
-					time.Sleep(1500 * time.Millisecond)
+					// Wait until the scheduled task reports running (best-effort) and serverconsole becomes ready.
 					if e.ProgressEmitter != nil {
-						e.ProgressEmitter(98, "Сервер запущен")
+						e.ProgressEmitter(97, "Ожидание запуска задачи…")
+					}
+					_ = waitForTaskRunningWindows("CyberstabServer", 45*time.Second)
+
+					if e.ProgressEmitter != nil {
+						e.ProgressEmitter(98, "Ожидание инициализации сервера…")
+					}
+					if err := waitForServerReadyWindows(e.InstallDir, 4*time.Minute); err != nil {
+						if e.ProgressEmitter != nil {
+							e.ProgressEmitter(99, "Сервер не готов: "+err.Error())
+						}
+						return err
+					}
+					if e.ProgressEmitter != nil {
+						e.ProgressEmitter(99, "Сервер инициализирован")
 					}
 				}
 			} else {
@@ -1493,9 +1508,18 @@ func ensureServerAutostartWindows(installDir string, serverPath string) error {
 	_ = runHidden("schtasks.exe", "/Delete", "/TN", taskName, "/F")
 	time.Sleep(300 * time.Millisecond)
 	
-	// Create new task with proper working directory
-	// /IT = Run task immediately if task is missed (for ONSTART tasks, run at next logon/startup)
-	err := runHidden("schtasks.exe", "/Create", "/F", "/TN", taskName, "/SC", "ONSTART", "/RL", "HIGHEST", "/TR", tr, "/SD", time.Now().Format("01/02/2006"), "/IT")
+	// Create new task to run at startup with highest privileges.
+	// Use SYSTEM account to avoid user/session issues.
+	err := runHidden(
+		"schtasks.exe",
+		"/Create",
+		"/F",
+		"/TN", taskName,
+		"/SC", "ONSTART",
+		"/RU", "SYSTEM",
+		"/RL", "HIGHEST",
+		"/TR", tr,
+	)
 	if err != nil {
 		return fmt.Errorf("не удалось создать задачу автозапуска: %w", err)
 	}
@@ -1513,6 +1537,90 @@ func ensureServerAutostartWindows(installDir string, serverPath string) error {
 	}
 	
 	return fmt.Errorf("задача создана, но не найдена при проверке")
+}
+
+func waitForTaskRunningWindows(taskName string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		out, err := runCmdWithTimeout(6*time.Second, "schtasks.exe", "/Query", "/TN", taskName, "/FO", "LIST", "/V")
+		if err == nil {
+			raw := strings.ToLower(out)
+			if strings.Contains(raw, "status:") && strings.Contains(raw, "running") {
+				return nil
+			}
+		}
+		time.Sleep(1200 * time.Millisecond)
+	}
+	return fmt.Errorf("таймаут ожидания запуска задачи %s", taskName)
+}
+
+func waitForServerReadyWindows(installDir string, timeout time.Duration) error {
+	// Readiness check by log marker.
+	// Server log path:
+	//   <installDir>\CyberstabServerWindows\log\server\error_log.log
+	// Wait until:
+	//   [main] NetworkMessageDispatcher started
+	logPath := filepath.Join(installDir, "CyberstabServerWindows", "log", "server", "error_log.log")
+	return waitForLogLineWindows(logPath, "[main] NetworkMessageDispatcher started", timeout)
+}
+
+func waitForLogLineWindows(logPath string, needle string, timeout time.Duration) error {
+	if strings.TrimSpace(logPath) == "" {
+		return fmt.Errorf("log path is empty")
+	}
+	if strings.TrimSpace(needle) == "" {
+		return fmt.Errorf("needle is empty")
+	}
+
+	deadline := time.Now().Add(timeout)
+
+	// We re-read the tail of the file. This is robust and doesn't require file sharing flags.
+	var lastSize int64 = -1
+	var stableCount int
+
+	for time.Now().Before(deadline) {
+		fi, err := os.Stat(logPath)
+		if err != nil {
+			// Log file may appear later.
+			time.Sleep(1200 * time.Millisecond)
+			continue
+		}
+		size := fi.Size()
+		if lastSize == size {
+			stableCount++
+		} else {
+			stableCount = 0
+		}
+		lastSize = size
+
+		// Read last up to 512KB (enough for recent startup logs, avoids huge reads).
+		const maxTail = int64(512 * 1024)
+		start := int64(0)
+		if size > maxTail {
+			start = size - maxTail
+		}
+
+		f, err := os.Open(logPath)
+		if err != nil {
+			time.Sleep(1200 * time.Millisecond)
+			continue
+		}
+		_, _ = f.Seek(start, 0)
+		b, _ := io.ReadAll(f)
+		_ = f.Close()
+
+		if bytes.Contains(b, []byte(needle)) {
+			return nil
+		}
+
+		// If log isn't growing for a while, back off slightly.
+		if stableCount > 5 {
+			time.Sleep(1800 * time.Millisecond)
+		} else {
+			time.Sleep(900 * time.Millisecond)
+		}
+	}
+	return fmt.Errorf("таймаут ожидания строки в логе: %s", needle)
 }
 
 func startServerTaskWindows() error {
@@ -1544,8 +1652,42 @@ func runHidden(exe string, args ...string) error {
 	var b bytes.Buffer
 	cmd.Stdout = &b
 	cmd.Stderr = &b
-	_ = cmd.Run()
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(b.String())
+		if msg == "" {
+			return err
+		}
+		return fmt.Errorf("%w: %s", err, msg)
+	}
 	return nil
+}
+
+func runCmdWithTimeout(timeout time.Duration, exe string, args ...string) (string, error) {
+	cmd := exec.Command(exe, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		return "", err
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		out := stdout.String()
+		if err != nil {
+			msg := strings.TrimSpace(stderr.String())
+			if msg == "" {
+				msg = err.Error()
+			}
+			return out, fmt.Errorf("%s", msg)
+		}
+		return out, nil
+	case <-time.After(timeout):
+		_ = cmd.Process.Kill()
+		return stdout.String(), fmt.Errorf("timeout")
+	}
 }
 
 func backupOkidociDbIfExistsWindows(pgPassword string, installDir string) error {

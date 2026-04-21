@@ -282,11 +282,21 @@ func (a *App) Uninstall(opts UninstallOptions) error {
 
 	var reports []string
 
+	// Windows: stop running server before touching DB/files to avoid locks.
+	if stdruntime.GOOS == "windows" {
+		_ = system.StopServer(strings.TrimSpace(opts.InstallDir))
+	}
+
 	// 1. Drop database and roles via PostgreSQL (if Postgres is reachable).
 	if !opts.SkipDB {
-		if _, err := findPgDir(); err == nil {
-			ensurePgRunning()
-
+		// Don't gate DB cleanup on a hardcoded PostgreSQL location.
+		// Use the db package detection (supports manual PickPgDir + standard locations).
+		ensurePgRunning()
+		pg, pgErr := db.CheckPostgres()
+		if pgErr != nil || pg == nil || !pg.Installed {
+			log.Printf("[UNINSTALL] PostgreSQL tools not found, skipping DB cleanup: %v", pgErr)
+			reports = append(reports, "PostgreSQL not found — DB cleanup skipped")
+		} else {
 			// Сначала БД и основные роли okidoci_* (без DELETE sec_user — см. DropOkidociDB).
 			if err := db.DropOkidociDB(opts.PostgresPassword); err != nil {
 				log.Printf("[UNINSTALL] DropOkidociDB warning: %v", err)
@@ -302,9 +312,6 @@ func (a *App) Uninstall(opts UninstallOptions) error {
 			} else {
 				reports = append(reports, "oki_* roles: dropped")
 			}
-		} else {
-			log.Printf("[UNINSTALL] PostgreSQL directory not found, skipping DB cleanup")
-			reports = append(reports, "PostgreSQL not found — DB cleanup skipped")
 		}
 	} else {
 		reports = append(reports, "БД: пропуск по запросу пользователя")

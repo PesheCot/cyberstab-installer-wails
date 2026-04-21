@@ -50,8 +50,8 @@ export function InstallPostgresFromUsb() {
   return window['go']['main']['App']['InstallPostgresFromUsb']();
 }
 
-export function LaunchClient() {
-  return window['go']['main']['App']['LaunchClient']();
+export function LaunchClient(arg1) {
+  return window['go']['main']['App']['LaunchClient'](arg1);
 }
 
 export function PickFolder() {

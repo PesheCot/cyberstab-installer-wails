@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 
 type StepInfo = {
   Index: number;
@@ -71,6 +71,8 @@ export const App: React.FC = () => {
   // Installation completion state.
   const [installDone, setInstallDone] = useState<boolean>(false);
   const [openCyberstab, setOpenCyberstab] = useState<boolean>(true);
+  const clientLaunchedRef = useRef(false);
+  const [closing, setClosing] = useState(false);
 
   // File copy progress bar (engine step 3).
   const [deployPct, setDeployPct] = useState<number>(0);
@@ -325,17 +327,32 @@ export const App: React.FC = () => {
     return true;
   }, [stage, installServer, installClients, installDB, needsPG, pgPass, info?.os, installDir, sourceRoot, dbAction, restoreSqlPath, dbChecking, usbChecking, pgInstalled, pgInstalling]);
 
-  const onCancel = () => {
-    // If installation is done and user wants to open Cyberstab, do it before quitting
-    if (installDone && openCyberstab) {
-      launchCyberstab();
+  const onCancel = async () => {
+    if (closing) return;
+    setClosing(true);
+
+    // If installation is done and user wants to open Cyberstab, do it BEFORE quitting.
+    // IMPORTANT: Wails calls are async; if we Quit immediately, the call may not reach backend.
+    if (installDone && openCyberstab && !clientLaunchedRef.current) {
+      try {
+        clientLaunchedRef.current = true;
+        await window.go.main.App.LaunchClient(installDir);
+      } catch {
+        // ignore
+      }
+      // Give the OS a moment to spawn the process before quitting.
+      window.setTimeout(() => window.runtime.Quit(), 400);
+      return;
     }
+
     window.runtime.Quit();
   };
 
   const launchCyberstab = () => {
     try {
-      window.go.main.App.LaunchClient();
+      if (clientLaunchedRef.current) return;
+      clientLaunchedRef.current = true;
+      window.go.main.App.LaunchClient(installDir);
     } catch {
       // Ignore launch errors
     }

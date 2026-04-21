@@ -101,7 +101,7 @@ func DumpDatabaseSQL(password string, dbName string, outputPath string) error {
 		if msg == "" {
 			msg = err.Error()
 		}
-		return fmt.Errorf(msg)
+		return fmt.Errorf("%s", msg)
 	}
 	return nil
 }
@@ -353,7 +353,7 @@ func runPSQL(password, dbName, sql string) (string, error) {
 		if msg == "" {
 			msg = err.Error()
 		}
-		return "", fmt.Errorf(msg)
+		return "", fmt.Errorf("%s", msg)
 	}
 	return stdout.String(), nil
 }

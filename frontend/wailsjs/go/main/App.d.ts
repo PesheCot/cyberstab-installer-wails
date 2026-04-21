@@ -27,7 +27,7 @@ export function Greet(arg1:string):Promise<string>;
 
 export function InstallPostgresFromUsb():Promise<void>;
 
-export function LaunchClient():Promise<void>;
+export function LaunchClient(arg1:string):Promise<void>;
 
 export function PickFolder():Promise<string>;
 
