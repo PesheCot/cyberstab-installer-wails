@@ -10,10 +10,6 @@ import (
 	installer "cyberstab-installer/pkg/installer"
 )
 
-func fallbackLogPath() string {
-	return "/tmp/cyberstab-installer.log"
-}
-
 func checkPlatformPrivileges() {
 	e := installer.NewEngine()
 	if e.NeedSudo() && !previewInstallDoneRequested() {

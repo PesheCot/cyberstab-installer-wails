@@ -5,7 +5,19 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 )
+
+func fallbackLogPath() string {
+	switch runtime.GOOS {
+	case "linux":
+		return "/tmp/cyberstab-installer.log"
+	case "windows":
+		return `C:\ProgramData\cyberstab-installer.log`
+	default:
+		return ""
+	}
+}
 
 func setupLogging() string {
 	logFilePath := filepath.Join(os.TempDir(), "cyberstab-installer.log")

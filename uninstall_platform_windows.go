@@ -13,10 +13,6 @@ import (
 	installer "cyberstab-installer/pkg/installer"
 )
 
-func fallbackLogPath() string {
-	return `C:\ProgramData\cyberstab-uninstaller.log`
-}
-
 func checkUninstallPrivileges() {
 	e := installer.NewEngine()
 	if e.NeedSudo() {
