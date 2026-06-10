@@ -149,7 +149,7 @@ func runPostgresPasswordReset(app *App, user string) (string, error) {
 	}
 
 	printCLISection("Забыли пароль?")
-	cliHint("Сброс через локальный доступ СУБД (peer/trust). Нужны права root или администратора.")
+	cliHint("Сброс через локальный peer-доступ PostgreSQL (sudo → runuser -u postgres).")
 	cliSummaryLine("Пользователь", user)
 
 	newPass, err := promptPassword("Новый пароль")

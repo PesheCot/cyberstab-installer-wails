@@ -68,3 +68,7 @@ func discoverJatobaBin() (string, error) {
 func StartPostgresServiceBestEffort() {
 	// Best-effort; Windows service names vary by PostgreSQL version.
 }
+
+func runPSQLAsLocalSuperuser(dbName, sql string) (string, error) {
+	return runPSQLAuth("postgres", "", dbName, sql)
+}

@@ -448,10 +448,9 @@ func SetUserPassword(username, newPassword string) error {
 		return errors.New("новый пароль не должен быть пустым")
 	}
 	sql := fmt.Sprintf("ALTER USER %s WITH PASSWORD '%s';", pqIdent(username), strings.ReplaceAll(newPassword, "'", "''"))
-	// Local trust auth as postgres is used to reset any role password on Windows.
-	_, err := runPSQLAuth("postgres", "", "postgres", sql)
+	_, err := runPSQLAsLocalSuperuser("postgres", sql)
 	if err != nil {
-		return fmt.Errorf("не удалось сменить пароль для %s (запустите установщик от администратора): %w", username, err)
+		return fmt.Errorf("не удалось сменить пароль для %s: %w", username, err)
 	}
 	return nil
 }
