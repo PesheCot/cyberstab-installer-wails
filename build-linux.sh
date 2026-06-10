@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Сборка Linux-установщика (запускать в Linux или WSL).
+# Зависимости (Ubuntu/Debian): libgtk-3-dev libwebkit2gtk-4.0-dev build-essential
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
