@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	stdruntime "runtime"
@@ -161,239 +160,58 @@ type UninstallOptions struct {
 }
 
 // StartInstall begins the installation process.
-// It validates input, prepares the installer engine, and runs the installation steps.
 func (a *App) StartInstall(opts StartInstallOptions) error {
-	a.mu.Lock()
-	if a.running {
-		a.mu.Unlock()
-		return fmt.Errorf("install is currently running")
-	}
-	a.running = true
-	a.mu.Unlock()
-
-	clearRunning := func() {
-		a.mu.Lock()
-		a.running = false
-		a.mu.Unlock()
-	}
-
-	// Validate required options
-	if opts.SourceRoot == "" {
-		clearRunning()
-		return fmt.Errorf("source root directory is required")
-	}
-
-	// Normalize source root path
-	opts.SourceRoot = filepath.Clean(opts.SourceRoot)
-	if fi, err := os.Stat(opts.SourceRoot); err != nil {
-		clearRunning()
-		return fmt.Errorf("source root does not exist: %w", err)
-	} else if !fi.IsDir() {
-		clearRunning()
-		return fmt.Errorf("source root is not a directory")
+	cb := InstallCallbacks{
+		OnSteps: func(steps []installerStepDTO) {
+			wailsruntime.EventsEmit(a.ctx, "install:step", map[string]interface{}{
+				"steps": steps,
+			})
+		},
+		OnProgress: func(pct int, status string, steps []installerStepDTO) {
+			wailsruntime.EventsEmit(a.ctx, "install:progress", map[string]interface{}{
+				"percentage": pct,
+				"status":     status,
+				"steps":      steps,
+			})
+			wailsruntime.EventsEmit(a.ctx, "init:progress", map[string]interface{}{
+				"percent": pct,
+				"status":  status,
+			})
+		},
+		OnDeploy: func(pct int, status string) {
+			wailsruntime.EventsEmit(a.ctx, "deploy:progress", map[string]interface{}{
+				"percentage": pct,
+				"percent":    pct,
+				"status":     status,
+			})
+		},
 	}
 
-	// Validate that at least one component is selected
-	if !opts.InstallServer && !opts.InstallClients && !opts.InstallDB {
-		clearRunning()
-		return fmt.Errorf("at least one component must be selected for installation")
-	}
-	if strings.TrimSpace(opts.DbAction) == "restore" && strings.TrimSpace(opts.RestoreSqlPath) == "" {
-		clearRunning()
-		return fmt.Errorf("укажите путь к файлу .sql для восстановления базы")
-	}
-
-	// Initialize installer engine
-	e := installer.NewEngine()
-	a.mu.Lock()
-	a.currentEngine = e
-	a.mu.Unlock()
-
-	e.Options.Components.InstallServer = opts.InstallServer
-	e.Options.Components.InstallClients = opts.InstallClients
-	e.Options.Components.InstallDB = opts.InstallDB
-	if kind := strings.TrimSpace(strings.ToLower(opts.DBEngine)); kind != "" {
-		_ = a.SelectDbEngine(kind)
-	}
-	e.Options.SourceRoot = opts.SourceRoot
-	e.Options.PostgresPassword = opts.PostgresPassword
-	e.Options.ReinstallExisting = opts.ReinstallExisting
-	e.Options.DBRestoreFile = strings.TrimSpace(opts.RestoreSqlPath)
-	applyDBModeFromWizard(&e.Options, opts.DbAction)
-	e.PgUser = strings.TrimSpace(opts.PostgresUser)
-	e.PgPassword = opts.PostgresPassword
-	e.UninstallerData = embeddedUninstallerBytes()
-	if opts.InstallDir != "" {
-		e.InstallDir = opts.InstallDir
-	}
-	e.ConfigureSteps()
-
-	emitSteps := func() {
-		wailsruntime.EventsEmit(a.ctx, "install:step", map[string]interface{}{
-			"steps": serializeEngineSteps(e.Steps),
-		})
-	}
-
-	// Setup progress reporting
-	e.ProgressEmitter = func(pct int, status string) {
-		wailsruntime.EventsEmit(a.ctx, "install:progress", map[string]interface{}{
-			"percentage": pct,
-			"status":     status,
-			"steps":      serializeEngineSteps(e.Steps),
-		})
-		wailsruntime.EventsEmit(a.ctx, "init:progress", map[string]interface{}{
-			"percent": pct,
-			"status":  status,
-		})
-		log.Printf("[INSTALL] %d%% - %s", pct, status)
-	}
-
-	e.DeployProgressEmitter = func(pct int, status string) {
-		wailsruntime.EventsEmit(a.ctx, "deploy:progress", map[string]interface{}{
-			"percentage": pct,
-			"percent":    pct,
-			"status":     status,
-		})
-		log.Printf("[DEPLOY] %d%% - %s", pct, status)
-	}
-
-	e.SetUpdateHandler(func() {
-		emitSteps()
-	})
-
-	emitSteps()
-	e.Run()
-	<-e.Done()
-
-	var runErr error
-	for i := range e.Steps {
-		if e.Steps[i].Error != nil {
-			runErr = e.Steps[i].Error
-			break
-		}
-	}
-
-	a.mu.Lock()
-	a.running = false
-	if a.currentEngine == e {
-		a.currentEngine = nil
-	}
-	a.mu.Unlock()
-
-	if runErr != nil {
-		log.Printf("[INSTALL] Failed: %v", runErr)
+	if err := a.runInstall(opts, cb); err != nil {
 		wailsruntime.EventsEmit(a.ctx, "install:error", map[string]interface{}{
-			"message": runErr.Error(),
+			"message": err.Error(),
 		})
-		return runErr
+		return err
 	}
 
 	wailsruntime.EventsEmit(a.ctx, "install:done", map[string]interface{}{
 		"message": "Installation completed successfully",
 	})
-	log.Printf("[INSTALL] Completed successfully")
 	return nil
 }
 
-// Uninstall performs a full uninstall:
-//   - Drops the okidoci_db database and all Cyberstab roles (okidoci_*, oki_*)
-//   - Removes the Cyberstab installation directory
-//   - Removes Windows scheduled tasks and desktop shortcuts
-//
-// PostgreSQL itself is NOT removed.
+// Uninstall performs a full uninstall (PostgreSQL itself is NOT removed).
 func (a *App) Uninstall(opts UninstallOptions) error {
-	a.mu.Lock()
-	if a.running {
-		a.mu.Unlock()
-		return fmt.Errorf("install is currently running — cannot uninstall")
+	res, err := a.runUninstallCore(opts)
+	if err != nil {
+		return err
 	}
-	a.running = true
-	a.mu.Unlock()
-	defer func() {
-		a.mu.Lock()
-		a.running = false
-		a.mu.Unlock()
-	}()
-
-	var reports []string
-
-	if stdruntime.GOOS == "windows" || stdruntime.GOOS == "linux" {
-		_ = system.StopServer(strings.TrimSpace(opts.InstallDir))
-	}
-
-	// 1. Drop database and roles via PostgreSQL (if Postgres is reachable).
-	if !opts.SkipDB {
-		// Don't gate DB cleanup on a hardcoded PostgreSQL location.
-		// Use the db package detection (supports manual PickPgDir + standard locations).
-		if kind := strings.TrimSpace(strings.ToLower(opts.DBEngine)); kind != "" {
-			_ = a.SelectDbEngine(kind)
-		}
-		ensurePgRunning()
-		pg, pgErr := db.CheckPostgres()
-		if pgErr != nil || pg == nil || !pg.Installed {
-			log.Printf("[UNINSTALL] PostgreSQL tools not found, skipping DB cleanup: %v", pgErr)
-			reports = append(reports, "PostgreSQL not found — DB cleanup skipped")
-		} else {
-			// Сначала БД и основные роли okidoci_* (без DELETE sec_user — см. DropOkidociDB).
-			if err := db.DropOkidociDB(opts.PostgresUser, opts.PostgresPassword); err != nil {
-				log.Printf("[UNINSTALL] DropOkidociDB warning: %v", err)
-				reports = append(reports, fmt.Sprintf("okidoci_db/roles: %v", err))
-			} else {
-				reports = append(reports, "okidoci_db and okidoci_* roles: dropped")
-			}
-
-			// Оставшиеся динамические oki_* на кластере.
-			if err := db.DropOkiUserRoles(opts.PostgresUser, opts.PostgresPassword); err != nil {
-				log.Printf("[UNINSTALL] DropOkiUserRoles warning: %v", err)
-				reports = append(reports, fmt.Sprintf("oki_* roles: %v", err))
-			} else {
-				reports = append(reports, "oki_* roles: dropped")
-			}
-		}
-	} else {
-		reports = append(reports, "БД: пропуск по запросу пользователя")
-	}
-
-	// 2. Remove installation directory, scheduled tasks, and shortcuts.
-	installDir := opts.InstallDir
-	if installDir == "" {
-		if stdruntime.GOOS == "linux" {
-			installDir = system.DefaultInstallDir
-		} else {
-			candidates := []string{
-				`C:\Program Files\Cyberstab`,
-				`C:\cyberstab`,
-			}
-			for _, c := range candidates {
-				if st, err := os.Stat(c); err == nil && st.IsDir() {
-					installDir = c
-					break
-				}
-			}
-			if installDir == "" {
-				installDir = system.DefaultInstallDir
-			}
-		}
-	}
-
-	deferred, fsErr := system.UninstallCyberstab(installDir)
-	if fsErr != nil {
-		log.Printf("[UNINSTALL] RemoveCyberstab warning: %v", fsErr)
-		reports = append(reports, fmt.Sprintf("files/tasks: %v", fsErr))
-	} else if deferred {
-		reports = append(reports, fmt.Sprintf("папка %s будет удалена после закрытия деинсталлятора", installDir))
-	} else {
-		reports = append(reports, fmt.Sprintf("install dir (%s) and tasks: removed", installDir))
-	}
-
-	reportStr := strings.Join(reports, " | ")
-	log.Printf("[UNINSTALL] Complete: %s", reportStr)
 	wailsruntime.EventsEmit(a.ctx, "uninstall:done", map[string]interface{}{
-		"report":   reportStr,
+		"report":   res.Report,
 		"success":  true,
-		"deferred": deferred,
+		"deferred": res.Deferred,
 	})
-	if deferred {
+	if res.Deferred {
 		go func() {
 			time.Sleep(450 * time.Millisecond)
 			wailsruntime.Quit(a.ctx)

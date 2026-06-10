@@ -36,9 +36,11 @@ jobs:
           chmod +x build-linux.sh
           ./build-linux.sh
 
-      - name: Upload installer
+      - name: Upload binaries
         uses: actions/upload-artifact@v4
         with:
           name: cyberstab-install-linux-amd64
-          path: build/bin/install
+          path: |
+            build/bin/install
+            build/bin/cyberstab-uninstaller
           if-no-files-found: error

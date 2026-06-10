@@ -1,4 +1,4 @@
-//go:build windows && cyberstab_uninstaller && !bindings
+//go:build !cyberstab_uninstaller && !cyberstab_manager && !bindings
 
 package main
 
@@ -9,15 +9,15 @@ import (
 
 func main() {
 	setupLogging()
-	checkUninstallPrivileges()
+	checkPlatformPrivileges()
 
 	forceConsole := parseLaunchMode(os.Args[1:])
 	if shouldRunConsole(forceConsole) {
 		app := NewApp()
-		if err := runCLIUninstall(app); err != nil {
+		if err := runCLIInstall(app); err != nil {
 			log.Fatal(err)
 		}
 		return
 	}
-	runGUIUninstall()
+	runGUIInstall()
 }

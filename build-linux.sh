@@ -19,4 +19,9 @@ fi
 echo "==> Linux installer"
 wails build -platform linux/amd64 -o install -ldflags ""
 
-echo "==> Done: $ROOT/build/bin/install"
+echo "==> Linux uninstaller"
+wails build -platform linux/amd64 -tags "cyberstab_uninstaller" -o cyberstab-uninstaller -ldflags ""
+
+echo "==> Done:"
+echo "    $ROOT/build/bin/install"
+echo "    $ROOT/build/bin/cyberstab-uninstaller"

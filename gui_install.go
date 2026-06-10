@@ -1,32 +1,16 @@
-//go:build bindings && !cyberstab_uninstaller && !cyberstab_manager
+//go:build !cyberstab_uninstaller && !cyberstab_manager && !bindings
 
 package main
 
 import (
-	"io"
 	"log"
-	"os"
-	"path/filepath"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 )
 
-// Minimal main for Wails bindings generation (CI); normal builds use main_install.go.
-func main() {
-	logFilePath := filepath.Join(os.TempDir(), "cyberstab-installer.log")
-	f, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
-	if err != nil {
-		logFilePath = fallbackLogPath()
-		f, err = os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
-	}
-	if err == nil {
-		log.SetOutput(io.MultiWriter(os.Stdout, f))
-		log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
-		defer f.Close()
-	}
-
+func runGUIInstall() {
 	app := NewApp()
 	cfg := &options.App{
 		Title:         "Установщик Киберстаб",
