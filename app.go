@@ -19,9 +19,10 @@ import (
 )
 
 type App struct {
-	ctx     context.Context
-	mu      sync.Mutex
-	running bool
+	ctx           context.Context
+	mu            sync.Mutex
+	running       bool
+	currentEngine *installer.Engine
 }
 
 // NewApp creates a new App application struct
@@ -44,17 +45,33 @@ func (a *App) DomReady(ctx context.Context) {
 // either by clicking the window close button or calling runtime.Quit.
 // Returning true will cause the application to continue, false will cause it to shut down.
 func (a *App) BeforeClose(ctx context.Context) bool {
+	_ = a.CancelInstall()
 	return true
 }
 
 // Shutdown is called at application termination
 func (a *App) Shutdown(ctx context.Context) {
-	// Perform your tear-down operations here
+	_ = a.CancelInstall()
 }
 
 // Greet returns a greeting for the given name
 func (a *App) Greet(name string) string {
 	return fmt.Sprintf("Hello %s, It's show time!", name)
+}
+
+func (a *App) CancelInstall() error {
+	a.mu.Lock()
+	engine := a.currentEngine
+	a.running = false
+	a.currentEngine = nil
+	a.mu.Unlock()
+
+	if engine != nil {
+		engine.Cancel()
+	} else {
+		installer.CancelActiveInstallerProcesses()
+	}
+	return nil
 }
 
 type ServerStatusDTO struct {
@@ -125,6 +142,8 @@ type StartInstallOptions struct {
 	InstallClients    bool   `json:"installClients"`
 	InstallDB         bool   `json:"installDB"`
 	SourceRoot        string `json:"sourceRoot"`
+	DBEngine          string `json:"dbEngine"`
+	PostgresUser      string `json:"postgresUser"`
 	PostgresPassword  string `json:"postgresPassword"`
 	InstallDir        string `json:"installDir"`
 	DbAction          string `json:"dbAction"` // "skip" | "new" | "restore" | ""
@@ -135,6 +154,8 @@ type StartInstallOptions struct {
 // UninstallOptions contains parameters for the uninstall operation.
 type UninstallOptions struct {
 	InstallDir       string `json:"installDir"`
+	DBEngine         string `json:"dbEngine"`
+	PostgresUser     string `json:"postgresUser"`
 	PostgresPassword string `json:"postgresPassword"`
 	SkipDB           bool   `json:"skipDB"`
 }
@@ -184,19 +205,28 @@ func (a *App) StartInstall(opts StartInstallOptions) error {
 
 	// Initialize installer engine
 	e := installer.NewEngine()
+	a.mu.Lock()
+	a.currentEngine = e
+	a.mu.Unlock()
+
 	e.Options.Components.InstallServer = opts.InstallServer
 	e.Options.Components.InstallClients = opts.InstallClients
 	e.Options.Components.InstallDB = opts.InstallDB
+	if kind := strings.TrimSpace(strings.ToLower(opts.DBEngine)); kind != "" {
+		_ = a.SelectDbEngine(kind)
+	}
 	e.Options.SourceRoot = opts.SourceRoot
 	e.Options.PostgresPassword = opts.PostgresPassword
 	e.Options.ReinstallExisting = opts.ReinstallExisting
 	e.Options.DBRestoreFile = strings.TrimSpace(opts.RestoreSqlPath)
 	applyDBModeFromWizard(&e.Options, opts.DbAction)
+	e.PgUser = strings.TrimSpace(opts.PostgresUser)
 	e.PgPassword = opts.PostgresPassword
 	e.UninstallerData = embeddedUninstallerBytes()
 	if opts.InstallDir != "" {
 		e.InstallDir = opts.InstallDir
 	}
+	e.ConfigureSteps()
 
 	emitSteps := func() {
 		wailsruntime.EventsEmit(a.ctx, "install:step", map[string]interface{}{
@@ -231,6 +261,7 @@ func (a *App) StartInstall(opts StartInstallOptions) error {
 		emitSteps()
 	})
 
+	emitSteps()
 	e.Run()
 	<-e.Done()
 
@@ -244,6 +275,9 @@ func (a *App) StartInstall(opts StartInstallOptions) error {
 
 	a.mu.Lock()
 	a.running = false
+	if a.currentEngine == e {
+		a.currentEngine = nil
+	}
 	a.mu.Unlock()
 
 	if runErr != nil {
@@ -265,6 +299,7 @@ func (a *App) StartInstall(opts StartInstallOptions) error {
 //   - Drops the okidoci_db database and all Cyberstab roles (okidoci_*, oki_*)
 //   - Removes the Cyberstab installation directory
 //   - Removes Windows scheduled tasks and desktop shortcuts
+//
 // PostgreSQL itself is NOT removed.
 func (a *App) Uninstall(opts UninstallOptions) error {
 	a.mu.Lock()
@@ -291,6 +326,9 @@ func (a *App) Uninstall(opts UninstallOptions) error {
 	if !opts.SkipDB {
 		// Don't gate DB cleanup on a hardcoded PostgreSQL location.
 		// Use the db package detection (supports manual PickPgDir + standard locations).
+		if kind := strings.TrimSpace(strings.ToLower(opts.DBEngine)); kind != "" {
+			_ = a.SelectDbEngine(kind)
+		}
 		ensurePgRunning()
 		pg, pgErr := db.CheckPostgres()
 		if pgErr != nil || pg == nil || !pg.Installed {
@@ -298,7 +336,7 @@ func (a *App) Uninstall(opts UninstallOptions) error {
 			reports = append(reports, "PostgreSQL not found — DB cleanup skipped")
 		} else {
 			// Сначала БД и основные роли okidoci_* (без DELETE sec_user — см. DropOkidociDB).
-			if err := db.DropOkidociDB(opts.PostgresPassword); err != nil {
+			if err := db.DropOkidociDB(opts.PostgresUser, opts.PostgresPassword); err != nil {
 				log.Printf("[UNINSTALL] DropOkidociDB warning: %v", err)
 				reports = append(reports, fmt.Sprintf("okidoci_db/roles: %v", err))
 			} else {
@@ -306,7 +344,7 @@ func (a *App) Uninstall(opts UninstallOptions) error {
 			}
 
 			// Оставшиеся динамические oki_* на кластере.
-			if err := db.DropOkiUserRoles(opts.PostgresPassword); err != nil {
+			if err := db.DropOkiUserRoles(opts.PostgresUser, opts.PostgresPassword); err != nil {
 				log.Printf("[UNINSTALL] DropOkiUserRoles warning: %v", err)
 				reports = append(reports, fmt.Sprintf("oki_* roles: %v", err))
 			} else {
@@ -349,9 +387,9 @@ func (a *App) Uninstall(opts UninstallOptions) error {
 	reportStr := strings.Join(reports, " | ")
 	log.Printf("[UNINSTALL] Complete: %s", reportStr)
 	wailsruntime.EventsEmit(a.ctx, "uninstall:done", map[string]interface{}{
-		"report":    reportStr,
-		"success":   true,
-		"deferred":  deferred,
+		"report":   reportStr,
+		"success":  true,
+		"deferred": deferred,
 	})
 	if deferred {
 		go func() {

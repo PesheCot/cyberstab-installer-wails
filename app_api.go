@@ -23,7 +23,7 @@ type AppInfo struct {
 	PostgresInstalled bool   `json:"postgresInstalled"`
 }
 
-// GetAppInfo reports OS, elevation, and whether PostgreSQL tools were detected.
+// GetAppInfo reports OS, elevation, and whether DB tools were detected.
 func (a *App) GetAppInfo() AppInfo {
 	e := installer.NewEngine()
 	osName := "windows"
@@ -33,8 +33,8 @@ func (a *App) GetAppInfo() AppInfo {
 	case runtime.GOOS != "windows":
 		osName = runtime.GOOS
 	}
-	pg, _ := db.CheckPostgres()
-	installed := pg != nil && pg.Installed
+	engines, _ := db.DiscoverEngines()
+	installed := len(engines) > 0
 	return AppInfo{
 		OS:                osName,
 		NeedAdmin:         e.NeedSudo(),
@@ -42,28 +42,67 @@ func (a *App) GetAppInfo() AppInfo {
 	}
 }
 
-// PgCheckResult is used by the PostgreSQL step in the wizard.
-type PgCheckResult struct {
-	Installed      bool   `json:"installed"`
-	InstallerFound bool   `json:"installerFound"`
-	InstallerPath  string `json:"installerPath"`
+// PreviewInstallDone is used only to open the desktop app on the final install screen for UI review.
+func (a *App) PreviewInstallDone() bool {
+	if os.Getenv("CYBERSTAB_PREVIEW_INSTALL_DONE") == "1" {
+		return true
+	}
+	for _, arg := range os.Args[1:] {
+		if arg == "--preview-install-done" {
+			return true
+		}
+	}
+	return false
 }
 
-// CheckPgInstalled reports whether PostgreSQL is already installed and whether an installer was found on media.
-func (a *App) CheckPgInstalled() (PgCheckResult, error) {
-	pg, err := db.CheckPostgres()
+type DbEngineDTO struct {
+	Kind        string `json:"kind"`
+	Label       string `json:"label"`
+	BinDir      string `json:"binDir"`
+	IsManual    bool   `json:"isManual"`
+}
+
+// DbCheckResult is used by the DB engine step in the wizard.
+type DbCheckResult struct {
+	Engines             []DbEngineDTO `json:"engines"`
+	Installed           bool          `json:"installed"`
+	InstallerFound      bool          `json:"installerFound"`
+	InstallerPath       string        `json:"installerPath"`
+	ActiveEngineKind    string        `json:"activeEngineKind"`
+}
+
+// CheckDbInstalled reports discovered DB engines and whether a PostgreSQL installer exists on media.
+func (a *App) CheckDbInstalled() (DbCheckResult, error) {
+	engines, err := db.DiscoverEngines()
 	if err != nil {
-		return PgCheckResult{}, err
+		return DbCheckResult{}, err
 	}
-	installed := pg != nil && pg.Installed
+	dto := make([]DbEngineDTO, 0, len(engines))
+	for _, e := range engines {
+		isManual := false
+		if active := db.GetActiveEngine(); strings.TrimSpace(active.BinDir) != "" {
+			isManual = strings.EqualFold(filepath.Clean(active.BinDir), filepath.Clean(e.BinDir)) &&
+				!strings.Contains(strings.ToLower(strings.ReplaceAll(e.BinDir, "/", `\`)), `\postgresql\`) &&
+				!strings.Contains(strings.ToLower(strings.ReplaceAll(e.BinDir, "/", `\`)), `\gis\jatoba\`)
+		}
+		dto = append(dto, DbEngineDTO{
+			Kind:     string(e.Kind),
+			Label:    e.DisplayName,
+			BinDir:   e.BinDir,
+			IsManual: isManual,
+		})
+	}
 	path := ""
-	if !installed {
+	if len(dto) == 0 {
 		path = findPostgresInstallerOnDrives()
 	}
-	return PgCheckResult{
-		Installed:      installed,
-		InstallerFound: path != "",
-		InstallerPath:  path,
+	active := db.GetActiveEngine()
+	return DbCheckResult{
+		Engines:          dto,
+		Installed:        len(dto) > 0,
+		InstallerFound:   path != "",
+		InstallerPath:    path,
+		ActiveEngineKind: string(active.Kind),
 	}, nil
 }
 
@@ -73,11 +112,11 @@ type OkidociCheckResult struct {
 }
 
 // CheckOkidociDB checks whether database okidoci_db exists.
-func (a *App) CheckOkidociDB(password string) (OkidociCheckResult, error) {
+func (a *App) CheckOkidociDB(user, password string) (OkidociCheckResult, error) {
 	if strings.TrimSpace(password) == "" {
-		return OkidociCheckResult{}, fmt.Errorf("нужен пароль postgres")
+		return OkidociCheckResult{}, fmt.Errorf("нужен пароль PostgreSQL")
 	}
-	ok, err := db.OkidociDatabaseExists(password)
+	ok, err := db.OkidociDatabaseExists(user, password)
 	if err != nil {
 		return OkidociCheckResult{}, err
 	}
@@ -137,10 +176,10 @@ func (a *App) PickFolder() (string, error) {
 	})
 }
 
-// PickPgDir lets the user choose a PostgreSQL installation directory (must contain bin\psql).
-func (a *App) PickPgDir() (string, error) {
+// PickDbDir lets user choose a DB engine root (must contain bin\psql).
+func (a *App) PickDbDir() (string, error) {
 	p, err := wailsruntime.OpenDirectoryDialog(a.ctx, wailsruntime.OpenDialogOptions{
-		Title: "Выберите папку установки PostgreSQL",
+		Title: "Выберите папку установки СУБД (PostgreSQL/Jatoba)",
 	})
 	if err != nil || strings.TrimSpace(p) == "" {
 		return "", err
@@ -157,6 +196,20 @@ func (a *App) PickPgDir() (string, error) {
 	return p, nil
 }
 
+// SelectDbEngine activates one of discovered DB engines by kind.
+func (a *App) SelectDbEngine(kind string) error {
+	switch strings.TrimSpace(strings.ToLower(kind)) {
+	case string(db.EnginePostgreSQL):
+		_, err := db.SelectEngineByKind(db.EnginePostgreSQL)
+		return err
+	case string(db.EngineJatoba):
+		_, err := db.SelectEngineByKind(db.EngineJatoba)
+		return err
+	default:
+		return fmt.Errorf("неизвестный тип СУБД: %s", kind)
+	}
+}
+
 // PickSqlFile opens a file picker for .sql backups.
 func (a *App) PickSqlFile() (string, error) {
 	return wailsruntime.OpenFileDialog(a.ctx, wailsruntime.OpenDialogOptions{
@@ -167,14 +220,23 @@ func (a *App) PickSqlFile() (string, error) {
 	})
 }
 
-// VerifyPostgresPassword checks the postgres password (quick check).
-func (a *App) VerifyPostgresPassword(password string) error {
-	return db.VerifyPassword(password)
+// VerifyPostgresPassword checks PostgreSQL credentials and superuser privileges required for install.
+func (a *App) VerifyPostgresPassword(user, password string) error {
+	if strings.TrimSpace(password) == "" {
+		return fmt.Errorf("нужен пароль СУБД")
+	}
+	return db.VerifyPostgresCredentials(user, password)
 }
 
-// ResetPostgresPassword sets a new password for postgres (uses trust injection on Windows when needed).
-func (a *App) ResetPostgresPassword(newPassword string) error {
-	return db.SetUserPassword("postgres", newPassword)
+// ResetPostgresPassword sets a new password for the given PostgreSQL role (connects as postgres via local trust).
+func (a *App) ResetPostgresPassword(username, newPassword string) error {
+	if strings.TrimSpace(username) == "" {
+		return fmt.Errorf("укажите пользователя PostgreSQL")
+	}
+	if strings.TrimSpace(newPassword) == "" {
+		return fmt.Errorf("новый пароль не должен быть пустым")
+	}
+	return db.SetUserPassword(username, newPassword)
 }
 
 // InstallPostgresFromUsb runs the PostgreSQL installer found under the detected distro root (same search as AutoDetectSourceRoot).
@@ -256,24 +318,24 @@ func (a *App) LaunchClient(installDir string) error {
 	if clientDir == "" {
 		return fmt.Errorf("client directory not found")
 	}
-	
+
 	// Find client exe
 	clientExe := installer.FindClientExeBestEffort(clientDir)
 	if clientExe == "" {
 		return fmt.Errorf("client executable not found")
 	}
-	
+
 	// Launch client with proper working directory
 	cmd := exec.Command(clientExe)
 	cmd.Dir = filepath.Dir(clientExe)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		HideWindow: false, // Show the window for client
 	}
-	
+
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start client: %w", err)
 	}
-	
+
 	return nil
 }
 

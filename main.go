@@ -44,23 +44,23 @@ func main() {
 		logFilePath = filepath.Join(os.Getenv("PROGRAMDATA"), "cyberstab-installer.log")
 		f, err = os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	}
-	
+
 	if err == nil {
 		mw := io.MultiWriter(os.Stdout, f)
 		log.SetOutput(mw)
 		log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
 		defer f.Close()
 	}
-	
+
 	log.Printf("=========================================")
 	log.Printf("Cyberstab Installer started (PID: %d)", os.Getpid())
 	log.Printf("Log file: %s", logFilePath)
 	log.Printf("=========================================")
-	
+
 	// Windows: if started without admin rights, relaunch with UAC.
 	if stdruntime.GOOS == "windows" {
 		e := installer.NewEngine()
-		if e.NeedSudo() {
+		if e.NeedSudo() && !previewInstallDoneRequested() {
 			if installer.TryRelaunchAsAdmin(os.Args) {
 				// UAC dialog was shown; the elevated instance is starting. Exit current.
 				os.Exit(0)
@@ -74,10 +74,11 @@ func main() {
 	app := NewApp()
 
 	if runErr := wails.Run(&options.App{
-		Title:  "Cyberstab Installer",
-		Width:  860,
-		Height: 620,
-		Frameless: true,
+		Title:         "Установщик Киберстаб",
+		Width:         860,
+		Height:        620,
+		DisableResize: true,
+		Frameless:     true,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
@@ -95,3 +96,14 @@ func main() {
 	}
 }
 
+func previewInstallDoneRequested() bool {
+	if os.Getenv("CYBERSTAB_PREVIEW_INSTALL_DONE") == "1" {
+		return true
+	}
+	for _, arg := range os.Args[1:] {
+		if arg == "--preview-install-done" {
+			return true
+		}
+	}
+	return false
+}

@@ -9,10 +9,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
+
+	"golang.org/x/text/encoding/charmap"
 )
 
 type PostgresInfo struct {
@@ -20,20 +24,120 @@ type PostgresInfo struct {
 	BinDir    string
 }
 
+type EngineKind string
+
+const (
+	EnginePostgreSQL EngineKind = "postgresql"
+	EngineJatoba     EngineKind = "jatoba"
+)
+
+type EngineInfo struct {
+	Kind        EngineKind
+	DisplayName string
+	BinDir      string
+	RootDir     string
+}
+
 var postgresBinDir string
+var activeEngine EngineInfo
 
 func SetPostgresBinDir(dir string) {
-	postgresBinDir = dir
+	postgresBinDir = strings.TrimSpace(dir)
+	if postgresBinDir == "" {
+		activeEngine = EngineInfo{}
+		return
+	}
+	kind := detectEngineKindByPath(postgresBinDir)
+	activeEngine = EngineInfo{
+		Kind:        kind,
+		DisplayName: engineDisplayName(kind),
+		BinDir:      postgresBinDir,
+		RootDir:     filepath.Dir(postgresBinDir),
+	}
+}
+
+func engineDisplayName(kind EngineKind) string {
+	if kind == EngineJatoba {
+		return "Jatoba"
+	}
+	return "PostgreSQL"
+}
+
+func detectEngineKindByPath(binDir string) EngineKind {
+	p := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(binDir), "/", `\`))
+	if strings.Contains(p, `\gis\jatoba\`) || strings.Contains(p, `\jatoba\`) {
+		return EngineJatoba
+	}
+	return EnginePostgreSQL
+}
+
+func DiscoverEngines() ([]EngineInfo, error) {
+	var out []EngineInfo
+	seen := map[string]bool{}
+	add := func(kind EngineKind, binDir string) {
+		binDir = strings.TrimSpace(binDir)
+		if binDir == "" {
+			return
+		}
+		key := strings.ToLower(filepath.Clean(binDir))
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		out = append(out, EngineInfo{
+			Kind:        kind,
+			DisplayName: engineDisplayName(kind),
+			BinDir:      binDir,
+			RootDir:     filepath.Dir(binDir),
+		})
+	}
+	if bin, err := discoverPostgresBin(); err == nil {
+		add(EnginePostgreSQL, bin)
+	}
+	if bin, err := discoverJatobaBin(); err == nil {
+		add(EngineJatoba, bin)
+	}
+	if strings.TrimSpace(postgresBinDir) != "" {
+		add(detectEngineKindByPath(postgresBinDir), postgresBinDir)
+	}
+	return out, nil
+}
+
+func SelectEngineByKind(kind EngineKind) (EngineInfo, error) {
+	engines, err := DiscoverEngines()
+	if err != nil {
+		return EngineInfo{}, err
+	}
+	for _, e := range engines {
+		if e.Kind == kind {
+			SetPostgresBinDir(e.BinDir)
+			return e, nil
+		}
+	}
+	return EngineInfo{}, fmt.Errorf("движок %s не найден", kind)
+}
+
+func GetActiveEngine() EngineInfo {
+	if strings.TrimSpace(activeEngine.BinDir) != "" {
+		return activeEngine
+	}
+	engines, _ := DiscoverEngines()
+	if len(engines) > 0 {
+		return engines[0]
+	}
+	return EngineInfo{}
 }
 
 func CheckPostgres() (*PostgresInfo, error) {
 	bin := postgresBinDir
 	if strings.TrimSpace(bin) == "" {
-		var err error
-		bin, err = discoverPostgresBin()
-		if err != nil {
+		engines, err := DiscoverEngines()
+		if err != nil || len(engines) == 0 {
 			return &PostgresInfo{Installed: false}, nil
 		}
+		bin = engines[0].BinDir
+		postgresBinDir = bin
+		activeEngine = engines[0]
 	}
 	psql := filepath.Join(bin, "psql")
 	if runtime.GOOS == "windows" {
@@ -45,13 +149,47 @@ func CheckPostgres() (*PostgresInfo, error) {
 	return &PostgresInfo{Installed: true, BinDir: bin}, nil
 }
 
-func VerifyPassword(password string) error {
-	_, err := runPSQL(password, "postgres", "SELECT 1;")
-	return err
+func normalizePgUser(user string) string {
+	u := strings.TrimSpace(user)
+	if u == "" {
+		return "postgres"
+	}
+	return u
 }
 
-func OkidociDatabaseExists(password string) (bool, error) {
-	out, err := runPSQL(password, "postgres", "SELECT 1 FROM pg_database WHERE datname='okidoci_db';")
+// VerifyPostgresCredentials checks login and whether the user can create SUPERUSER roles (required by dbupdater).
+func VerifyPostgresCredentials(user, password string) error {
+	user = normalizePgUser(user)
+	if _, err := runPSQLAuth(user, password, "postgres", "SELECT 1;"); err != nil {
+		return friendlyCredentialError(user, err.Error())
+	}
+	if err := verifyCanCreateSuperuserRole(user, password); err != nil {
+		return err
+	}
+	return nil
+}
+
+func verifyCanCreateSuperuserRole(user, password string) error {
+	out, err := runPSQLAuth(user, password, "postgres", "SELECT COALESCE(rolsuper, false) FROM pg_roles WHERE rolname = current_user;")
+	if err != nil {
+		return friendlyCredentialError(user, err.Error())
+	}
+	if strings.TrimSpace(out) == "t" {
+		return nil
+	}
+	testRole := fmt.Sprintf("_cyberstab_chk_%d", time.Now().UnixNano())
+	createSQL := fmt.Sprintf("CREATE ROLE %s WITH SUPERUSER NOLOGIN;", pqIdent(testRole))
+	if _, err := runPSQLAuth(user, password, "postgres", createSQL); err != nil {
+		return fmt.Errorf(
+			"недостаточно прав: для установки Киберстаб нужен пользователь PostgreSQL с правами суперпользователя (создание ролей с SUPERUSER)",
+		)
+	}
+	_, _ = runPSQLAuth(user, password, "postgres", fmt.Sprintf("DROP ROLE IF EXISTS %s;", pqIdent(testRole)))
+	return nil
+}
+
+func OkidociDatabaseExists(user, password string) (bool, error) {
+	out, err := runPSQLAuth(normalizePgUser(user), password, "postgres", "SELECT 1 FROM pg_database WHERE datname='okidoci_db';")
 	if err != nil {
 		return false, err
 	}
@@ -60,7 +198,8 @@ func OkidociDatabaseExists(password string) (bool, error) {
 
 // DumpDatabaseSQL creates a plain SQL dump of the given database using pg_dump.
 // It writes dump to outputPath.
-func DumpDatabaseSQL(password string, dbName string, outputPath string) error {
+func DumpDatabaseSQL(user, password string, dbName string, outputPath string) error {
+	user = normalizePgUser(user)
 	info, err := CheckPostgres()
 	if err != nil || info == nil || !info.Installed {
 		return fmt.Errorf("PostgreSQL not found")
@@ -83,7 +222,7 @@ func DumpDatabaseSQL(password string, dbName string, outputPath string) error {
 	defer f.Close()
 
 	// Plain SQL format (-Fp) is easiest for manual restore/debugging.
-	args := []string{"-U", "postgres", "-d", dbName, "-Fp"}
+	args := []string{"-U", user, "-d", dbName, "-Fp"}
 	cmd := exec.Command(pgDump, args...)
 	if runtime.GOOS == "windows" {
 		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
@@ -106,7 +245,8 @@ func DumpDatabaseSQL(password string, dbName string, outputPath string) error {
 	return nil
 }
 
-func DropOkidociDB(password string) error {
+func DropOkidociDB(user, password string) error {
+	user = normalizePgUser(user)
 	log.Printf("[DROP] Starting okidoci_db cleanup...")
 
 	info, err := CheckPostgres()
@@ -121,7 +261,7 @@ func DropOkidociDB(password string) error {
 
 	// Helper to run psql with proper env
 	runPsql := func(dbName, sql string) error {
-		cmd := exec.Command(psql, "-U", "postgres", "-d", dbName, "-c", sql)
+		cmd := exec.Command(psql, "-U", user, "-d", dbName, "-c", sql)
 		cmd.Env = append(os.Environ(), "PGPASSWORD="+password)
 		if runtime.GOOS == "windows" {
 			cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
@@ -196,7 +336,8 @@ func DropOkidociDB(password string) error {
 }
 
 // runPSQLWithLog runs a psql command with logging
-func runPSQLWithLog(password, dbName, sql string) error {
+func runPSQLWithLog(user, password, dbName, sql string) error {
+	user = normalizePgUser(user)
 	info, err := CheckPostgres()
 	if err != nil || info == nil || !info.Installed {
 		return fmt.Errorf("PostgreSQL not found")
@@ -209,7 +350,7 @@ func runPSQLWithLog(password, dbName, sql string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	args := []string{"-U", "postgres", "-d", dbName, "-c", sql}
+	args := []string{"-U", user, "-d", dbName, "-c", sql}
 	cmd := exec.CommandContext(ctx, psql, args...)
 	cmd.Env = os.Environ()
 	if strings.TrimSpace(password) != "" {
@@ -218,11 +359,11 @@ func runPSQLWithLog(password, dbName, sql string) error {
 	if runtime.GOOS == "windows" {
 		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	}
-	
+
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	
+
 	if err := cmd.Run(); err != nil {
 		log.Printf("[PSQL] Error executing SQL on %s: %v", dbName, err)
 		if stderr.Len() > 0 {
@@ -236,7 +377,8 @@ func runPSQLWithLog(password, dbName, sql string) error {
 }
 
 // runPSQLQuiet runs a psql command silently (best-effort, no output)
-func runPSQLQuiet(password, dbName, sql string) (string, error) {
+func runPSQLQuiet(user, password, dbName, sql string) (string, error) {
+	user = normalizePgUser(user)
 	info, err := CheckPostgres()
 	if err != nil || info == nil || !info.Installed {
 		return "", fmt.Errorf("PostgreSQL not found")
@@ -249,7 +391,7 @@ func runPSQLQuiet(password, dbName, sql string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	args := []string{"-U", "postgres", "-d", dbName, "-c", sql}
+	args := []string{"-U", user, "-d", dbName, "-c", sql}
 	cmd := exec.CommandContext(ctx, psql, args...)
 	cmd.Env = os.Environ()
 	if strings.TrimSpace(password) != "" {
@@ -258,24 +400,25 @@ func runPSQLQuiet(password, dbName, sql string) (string, error) {
 	if runtime.GOOS == "windows" {
 		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	}
-	
+
 	// Discard all output
 	cmd.Stdout = nil
 	cmd.Stderr = nil
-	
+
 	return "", cmd.Run()
 }
 
-func DropOkiUserRoles(password string) error {
-	return DropCyberstabRoles(password)
+func DropOkiUserRoles(user, password string) error {
+	return DropCyberstabRoles(user, password)
 }
 
 // DropCyberstabRoles removes all roles that belong to Cyberstab:
 // - okidoci_* (including fixed roles)
 // - oki_*
-func DropCyberstabRoles(password string) error {
+func DropCyberstabRoles(user, password string) error {
+	user = normalizePgUser(user)
 	// Drop oki_* (dynamic) first, then okidoci_* (fixed).
-	_, _ = runPSQLQuiet(password, "postgres", `
+	_, _ = runPSQLQuiet(user, password, "postgres", `
 DO $$ DECLARE r record;
 BEGIN
   FOR r IN
@@ -289,7 +432,7 @@ BEGIN
   END LOOP;
 END $$;`)
 
-	_, err := runPSQLQuiet(password, "postgres", `
+	_, err := runPSQLQuiet(user, password, "postgres", `
 DO $$ DECLARE r record;
 BEGIN
   FOR r IN
@@ -306,15 +449,20 @@ END $$;`)
 }
 
 func SetUserPassword(username, newPassword string) error {
-	if strings.TrimSpace(username) == "" {
-		return errors.New("username is required")
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return errors.New("укажите пользователя PostgreSQL")
 	}
 	if newPassword == "" {
-		return errors.New("password is required")
+		return errors.New("новый пароль не должен быть пустым")
 	}
 	sql := fmt.Sprintf("ALTER USER %s WITH PASSWORD '%s';", pqIdent(username), strings.ReplaceAll(newPassword, "'", "''"))
-	_, err := runPSQL("", "postgres", sql)
-	return err
+	// Local trust auth as postgres is used to reset any role password on Windows.
+	_, err := runPSQLAuth("postgres", "", "postgres", sql)
+	if err != nil {
+		return fmt.Errorf("не удалось сменить пароль для %s (запустите установщик от администратора): %w", username, err)
+	}
+	return nil
 }
 
 func StartPostgresServiceBestEffort() {
@@ -322,7 +470,8 @@ func StartPostgresServiceBestEffort() {
 	// Real implementation depends on how PostgreSQL is installed (service name varies).
 }
 
-func runPSQL(password, dbName, sql string) (string, error) {
+func runPSQLAuth(user, password, dbName, sql string) (string, error) {
+	user = normalizePgUser(user)
 	info, err := CheckPostgres()
 	if err != nil || info == nil || !info.Installed {
 		return "", fmt.Errorf("PostgreSQL not found")
@@ -335,7 +484,7 @@ func runPSQL(password, dbName, sql string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
 
-	args := []string{"-U", "postgres", "-d", dbName, "-t", "-A", "-c", sql}
+	args := []string{"-U", user, "-d", dbName, "-t", "-A", "-c", sql}
 	cmd := exec.CommandContext(ctx, psql, args...)
 	if runtime.GOOS == "windows" {
 		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
@@ -349,13 +498,101 @@ func runPSQL(password, dbName, sql string) (string, error) {
 	cmd.Stderr = &stderr
 	err = cmd.Run()
 	if err != nil {
-		msg := strings.TrimSpace(stderr.String())
+		msg := decodePSQLOutput(stderr.Bytes())
 		if msg == "" {
 			msg = err.Error()
 		}
 		return "", fmt.Errorf("%s", msg)
 	}
 	return stdout.String(), nil
+}
+
+var (
+	reQuotedRole = regexp.MustCompile(`(?i)(?:role|роль)\s+"([^"]+)"`)
+	reQuotedUser = regexp.MustCompile(`(?i)(?:for user|для пользователя)\s+"([^"]+)"`)
+)
+
+func decodePSQLOutput(b []byte) string {
+	if len(b) == 0 {
+		return ""
+	}
+	if utf8.Valid(b) {
+		return strings.TrimSpace(string(b))
+	}
+	if runtime.GOOS == "windows" {
+		for _, cm := range []*charmap.Charmap{charmap.CodePage866, charmap.Windows1251} {
+			if s, err := cm.NewDecoder().Bytes(b); err == nil && utf8.Valid(s) {
+				return strings.TrimSpace(string(s))
+			}
+		}
+	}
+	return strings.TrimSpace(string(b))
+}
+
+func dbEngineLabel() string {
+	if ae := GetActiveEngine(); strings.TrimSpace(ae.DisplayName) != "" {
+		return ae.DisplayName
+	}
+	return "СУБД"
+}
+
+func friendlyCredentialError(user, raw string) error {
+	text := strings.TrimSpace(raw)
+	lower := strings.ToLower(text)
+
+	role := extractQuotedRole(text)
+	if role == "" {
+		role = user
+	}
+
+	engine := dbEngineLabel()
+
+	switch {
+	case strings.Contains(lower, "password authentication failed"),
+		strings.Contains(lower, "authentication failed"),
+		strings.Contains(lower, "неверный пароль"),
+		strings.Contains(lower, "проверка подлинности") && strings.Contains(lower, "парол"):
+		return fmt.Errorf("неверный пароль пользователя «%s»", role)
+
+	case strings.Contains(lower, "does not exist") && (strings.Contains(lower, "role") || strings.Contains(lower, "роль")),
+		strings.Contains(lower, "не существует") && (strings.Contains(lower, "role") || strings.Contains(lower, "роль")):
+		return fmt.Errorf("пользователь «%s» не существует", role)
+
+	case strings.Contains(lower, "is not permitted to log in"),
+		strings.Contains(lower, "запрещ") && strings.Contains(lower, "вход"):
+		return fmt.Errorf("пользователю «%s» запрещён вход в %s", role, engine)
+
+	case strings.Contains(lower, "connection refused"),
+		strings.Contains(lower, "could not connect"),
+		strings.Contains(lower, "не удается подключиться"),
+		strings.Contains(lower, "не удаётся подключиться"),
+		strings.Contains(lower, "отклонил") && strings.Contains(lower, "подключ"):
+		return fmt.Errorf("не удалось подключиться к %s: сервис не запущен или недоступен", engine)
+
+	case strings.Contains(lower, "timeout"),
+		strings.Contains(lower, "timed out"),
+		strings.Contains(lower, "время ожидания"):
+		return fmt.Errorf("превышено время ожидания подключения к %s", engine)
+
+	case strings.Contains(lower, "not found") && strings.Contains(lower, "postgresql"):
+		return fmt.Errorf("%s не найдена", engine)
+	}
+
+	if strings.Contains(lower, "psql:") || strings.Contains(text, "\ufffd") {
+		return fmt.Errorf("не удалось подключиться к %s: проверьте имя пользователя и пароль", engine)
+	}
+
+	return fmt.Errorf("не удалось подключиться к %s: %s", engine, text)
+}
+
+func extractQuotedRole(s string) string {
+	if m := reQuotedRole.FindStringSubmatch(s); len(m) > 1 {
+		return m[1]
+	}
+	if m := reQuotedUser.FindStringSubmatch(s); len(m) > 1 {
+		return m[1]
+	}
+	return ""
 }
 
 func discoverPostgresBin() (string, error) {
@@ -387,6 +624,37 @@ func discoverPostgresBin() (string, error) {
 		}
 	}
 	return "", errors.New("PostgreSQL not found")
+}
+
+func discoverJatobaBin() (string, error) {
+	if runtime.GOOS != "windows" {
+		return "", errors.New("unsupported OS")
+	}
+	candidates := []string{
+		filepath.Join(os.Getenv("ProgramFiles"), "GIS", "Jatoba"),
+		filepath.Join(os.Getenv("ProgramFiles(x86)"), "GIS", "Jatoba"),
+		`C:\Program Files\GIS\Jatoba`,
+	}
+	for _, base := range candidates {
+		if strings.TrimSpace(base) == "" || base == "Jatoba" {
+			continue
+		}
+		entries, err := os.ReadDir(base)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			bin := filepath.Join(base, e.Name(), "bin")
+			psql := filepath.Join(bin, "psql.exe")
+			if _, err := os.Stat(psql); err == nil {
+				return bin, nil
+			}
+		}
+	}
+	return "", errors.New("Jatoba not found")
 }
 
 func pqIdent(s string) string {

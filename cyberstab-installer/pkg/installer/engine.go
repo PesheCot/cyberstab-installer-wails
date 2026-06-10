@@ -59,6 +59,8 @@ type Engine struct {
 	Options         InstallOptions
 	Steps           []StepInfo
 	DoneCh          chan struct{}
+	CancelCh        chan struct{}
+	PgUser          string
 	PgPassword      string
 	InstallDir      string
 	UninstallerData []byte
@@ -69,24 +71,104 @@ type Engine struct {
 	mu           sync.Mutex
 	update       func()
 	doneOnce     sync.Once
+	cancelOnce   sync.Once
 	runningError error
 }
 
 func NewEngine() *Engine {
-	e := &Engine{
-		DoneCh: make(chan struct{}),
-		Steps: []StepInfo{
-			{Index: 1, Description: "Проверка параметров"},
-			{Index: 2, Description: "Подготовка папки установки"},
-			{Index: 3, Description: "Копирование файлов"},
-			{Index: 4, Description: "Инициализация базы данных"},
-			{Index: 5, Description: "Завершение"},
-		},
+	return &Engine{
+		DoneCh:   make(chan struct{}),
+		CancelCh: make(chan struct{}),
 	}
-	return e
+}
+
+// ConfigureSteps builds the visible install step list from selected options.
+func (e *Engine) ConfigureSteps() {
+	e.Steps = buildInstallSteps(e.Options)
+}
+
+func buildInstallSteps(o InstallOptions) []StepInfo {
+	var steps []StepInfo
+	add := func(desc string) {
+		steps = append(steps, StepInfo{Index: len(steps) + 1, Description: desc})
+	}
+	add("Проверка параметров")
+	add("Подготовка папки установки")
+	if o.ReinstallExisting {
+		add("Копирование файлов")
+	}
+	if needsDBInitStep(o) {
+		add("Инициализация базы данных")
+	}
+	add("Завершение")
+	return steps
+}
+
+func needsDBInitStep(o InstallOptions) bool {
+	if !(o.Components.InstallDB || o.Components.InstallServer) {
+		return false
+	}
+	return o.DBMode != DBModeKeep
 }
 
 func (e *Engine) Done() <-chan struct{} { return e.DoneCh }
+
+func (e *Engine) Cancel() {
+	e.cancelOnce.Do(func() {
+		close(e.CancelCh)
+		CancelActiveInstallerProcesses()
+	})
+}
+
+func (e *Engine) checkCancelled() error {
+	select {
+	case <-e.CancelCh:
+		return errors.New("установка отменена пользователем")
+	default:
+		return nil
+	}
+}
+
+func (e *Engine) writeEmbeddedUninstallerWindows() error {
+	if runtime.GOOS != "windows" {
+		return nil
+	}
+	if len(e.UninstallerData) == 0 {
+		return fmt.Errorf("embedded uninstaller is missing")
+	}
+	installDir := installDirOrDefault(e.InstallDir)
+	if err := os.MkdirAll(installDir, 0755); err != nil {
+		return fmt.Errorf("failed to prepare install dir for uninstaller: %w", err)
+	}
+	unPath := filepath.Join(installDir, "cyberstab-uninstaller.exe")
+	if err := os.WriteFile(unPath, e.UninstallerData, 0755); err != nil {
+		return fmt.Errorf("failed to write uninstaller to %s: %w", unPath, err)
+	}
+	stat, err := os.Stat(unPath)
+	if err != nil {
+		return fmt.Errorf("failed to verify uninstaller at %s: %w", unPath, err)
+	}
+	if stat.Size() == 0 {
+		return fmt.Errorf("failed to verify uninstaller at %s: file is empty", unPath)
+	}
+	refreshWindowsIconCache()
+	log.Printf("[INSTALL] Uninstaller written: %s (%d bytes)", unPath, len(e.UninstallerData))
+	return nil
+}
+
+func refreshWindowsIconCache() {
+	if runtime.GOOS != "windows" {
+		return
+	}
+	shell32 := syscall.NewLazyDLL("shell32.dll")
+	shChangeNotify := shell32.NewProc("SHChangeNotify")
+	const (
+		shcneAssocChanged = 0x08000000
+		shcnfIDList       = 0x0000
+	)
+	_, _, _ = shChangeNotify.Call(uintptr(shcneAssocChanged), uintptr(shcnfIDList), 0, 0)
+	_ = runHidden("ie4uinit.exe", "-show")
+}
 
 func (e *Engine) SetUpdateHandler(fn func()) {
 	e.mu.Lock()
@@ -111,11 +193,25 @@ func (e *Engine) Run() {
 }
 
 func (e *Engine) run() error {
+	if len(e.Steps) == 0 {
+		e.ConfigureSteps()
+	}
+	stepIdx := 0
 	step := func(i int, fn func() error) error {
+		if err := e.checkCancelled(); err != nil {
+			return err
+		}
 		e.Steps[i].IsActive = true
 		e.emitUpdate()
 		err := fn()
 		if err != nil {
+			e.Steps[i].Error = err
+			e.Steps[i].ErrorText = err.Error()
+			e.Steps[i].IsActive = false
+			e.emitUpdate()
+			return err
+		}
+		if err := e.checkCancelled(); err != nil {
 			e.Steps[i].Error = err
 			e.Steps[i].ErrorText = err.Error()
 			e.Steps[i].IsActive = false
@@ -127,9 +223,16 @@ func (e *Engine) run() error {
 		e.emitUpdate()
 		return nil
 	}
+	nextStep := func(fn func() error) error {
+		if err := step(stepIdx, fn); err != nil {
+			return err
+		}
+		stepIdx++
+		return nil
+	}
 
 	// 1) Validate
-	if err := step(0, func() error {
+	if err := nextStep(func() error {
 		if strings.TrimSpace(e.Options.SourceRoot) == "" {
 			return errors.New("source root directory is required")
 		}
@@ -145,7 +248,7 @@ func (e *Engine) run() error {
 	}
 
 	// 2) Prepare install dir
-	if err := step(1, func() error {
+	if err := nextStep(func() error {
 		if e.InstallDir == "" {
 			if runtime.GOOS == "windows" {
 				e.InstallDir = `C:\Program Files\Cyberstab`
@@ -153,33 +256,68 @@ func (e *Engine) run() error {
 				e.InstallDir = `/opt/cyberstab`
 			}
 		}
-		return os.MkdirAll(e.InstallDir, 0755)
+		if err := os.MkdirAll(e.InstallDir, 0755); err != nil {
+			return err
+		}
+		return nil
 	}); err != nil {
 		return err
 	}
 
-	// 3) Deploy files (best-effort copy)
-	if err := step(2, func() error {
+	// 3) Deploy files (best-effort copy) — skipped when user chose "Оставить" (ReinstallExisting=false).
+	if e.Options.ReinstallExisting {
+		if err := nextStep(func() error {
 		if e.DeployProgressEmitter != nil {
 			e.DeployProgressEmitter(0, "Подготовка…")
 		}
-		
+
+		installDir := installDirOrDefault(e.InstallDir)
+
+		// "Оставить" in UI sets ReinstallExisting=false: keep files on disk, do not copy from USB.
+		if !e.Options.ReinstallExisting {
+			_ = stopCyberstabProcesses()
+			if e.DeployProgressEmitter != nil {
+				e.DeployProgressEmitter(10, "Используются существующие файлы…")
+			}
+			if err := verifyExistingInstallation(installDir, e.Options.Components); err != nil {
+				return err
+			}
+			if runtime.GOOS == "windows" {
+				if e.DeployProgressEmitter != nil {
+					e.DeployProgressEmitter(50, "Обновление деинсталлятора…")
+				}
+				if err := e.writeEmbeddedUninstallerWindows(); err != nil {
+					return err
+				}
+			}
+			if e.DeployProgressEmitter != nil {
+				e.DeployProgressEmitter(100, "Готово")
+			}
+			return nil
+		}
+
 		// Stop any running Cyberstab processes before copying
 		_ = stopCyberstabProcesses()
-		
-		// Clean up old installation folders if this is a reinstall
-		if e.Options.ReinstallExisting {
-			if e.DeployProgressEmitter != nil {
-				e.DeployProgressEmitter(2, "Удаление старых файлов…")
-			}
-			_ = cleanOldInstallationFolders(e.InstallDir)
+
+		// Reinstall: remove old Cyberstab folders, then copy from source.
+		if e.DeployProgressEmitter != nil {
+			e.DeployProgressEmitter(2, "Удаление старых файлов…")
 		}
-		
+		_ = cleanOldInstallationFolders(installDir)
+
 		// Copy only Cyberstab distro folders from the selected source root.
 		// Do NOT attempt to copy the entire drive root (it contains protected/system dirs).
 		dst := e.InstallDir
 		if err := os.MkdirAll(dst, 0755); err != nil {
 			return err
+		}
+		if runtime.GOOS == "windows" {
+			if e.DeployProgressEmitter != nil {
+				e.DeployProgressEmitter(3, "Копирование деинсталлятора…")
+			}
+			if err := e.writeEmbeddedUninstallerWindows(); err != nil {
+				return err
+			}
 		}
 
 		var prefixes []string
@@ -251,7 +389,7 @@ func (e *Engine) run() error {
 		if e.DeployProgressEmitter != nil {
 			e.DeployProgressEmitter(100, "Готово")
 		}
-		
+
 		// Set permissions for client folder IMMEDIATELY after copying
 		if runtime.GOOS == "windows" && e.Options.Components.InstallClients {
 			log.Printf("[INSTALL] Step 3.1: Setting client folder permissions...")
@@ -270,79 +408,101 @@ func (e *Engine) run() error {
 			log.Printf("[INSTALL] Step 3.1: SKIPPED - InstallClients = %v", e.Options.Components.InstallClients)
 			flushLog()
 		}
-		
+
 		return nil
-	}); err != nil {
-		return err
+		}); err != nil {
+			return err
+		}
 	}
 
-	// 4) DB init: run dbupdater with selected mode.
-	if err := step(3, func() error {
+	// 4) DB init: run dbupdater with selected mode — skipped when user chose to keep DB.
+	if needsDBInitStep(e.Options) {
+		if err := nextStep(func() error {
 		if !(e.Options.Components.InstallDB || e.Options.Components.InstallServer) {
 			return nil
 		}
 		if e.ProgressEmitter != nil {
 			e.ProgressEmitter(0, "Поиск dbupdater…")
 		}
-		
+
 		installDir := installDirOrDefault(e.InstallDir)
-		
+
 		// Step 4.1: Copy server.properties to dbupdater directory
 		if e.ProgressEmitter != nil {
 			e.ProgressEmitter(2, "Подготовка dbupdater…")
 		}
 		log.Printf("[DB] Copying server.properties to dbupdater directory...")
 		_ = ensureDbUpdaterServerProperties(installDir, filepath.Dir(filepath.Join(installDir, "dbupdater", "dbupdater.exe")))
-		
-		// Step 4.2: FULL cleanup - drop database and ALL Cyberstab roles
-		if e.ProgressEmitter != nil {
-			e.ProgressEmitter(4, "Очистка базы данных…")
+
+		log.Printf("[DB] Selected DB mode: %s", e.Options.DBMode)
+		switch e.Options.DBMode {
+		case DBModeKeep:
+			log.Printf("[DB] Keeping existing database: cleanup and dbupdater are skipped")
+		case DBModeRecreate, DBModeRestore:
+			if e.Options.DBMode == DBModeRecreate || e.Options.DBMode == DBModeRestore {
+				if e.ProgressEmitter != nil {
+					e.ProgressEmitter(3, "Резервная копия текущей БД…")
+				}
+				if err := backupOkidociDbIfExistsWindows(e.PgUser, e.PgPassword, installDir); err != nil {
+					log.Printf("[DB] Backup before DB cleanup failed: %v", err)
+					return fmt.Errorf("не удалось сохранить БД перед удалением: %w", err)
+				}
+			}
+
+			// Step 4.2: FULL cleanup - drop database and ALL Cyberstab roles
+			if e.ProgressEmitter != nil {
+				e.ProgressEmitter(4, "Очистка базы данных…")
+			}
+			log.Printf("[DB] =========================================")
+			log.Printf("[DB] Starting FULL database cleanup...")
+			log.Printf("[DB] =========================================")
+
+			if err := db.DropOkidociDB(e.PgUser, e.PgPassword); err != nil {
+				log.Printf("[DB] ERROR: DropOkidociDB failed: %v", err)
+				return fmt.Errorf("failed to drop okidoci_db: %w", err)
+			}
+			log.Printf("[DB] okidoci_db dropped successfully")
+
+			if err := db.DropCyberstabRoles(e.PgUser, e.PgPassword); err != nil {
+				log.Printf("[DB] ERROR: DropCyberstabRoles failed: %v", err)
+				// Continue - dbupdater will create roles anyway
+			} else {
+				log.Printf("[DB] All Cyberstab roles dropped successfully")
+			}
+
+			// Give PostgreSQL time to clean up
+			time.Sleep(1 * time.Second)
+
+			log.Printf("[DB] =========================================")
+			log.Printf("[DB] Database cleanup completed successfully")
+			log.Printf("[DB] =========================================")
+		default:
+			log.Printf("[DB] DB mode %q: no pre-cleanup, dbupdater will apply updates", e.Options.DBMode)
 		}
-		log.Printf("[DB] =========================================")
-		log.Printf("[DB] Starting FULL database cleanup...")
-		log.Printf("[DB] =========================================")
-		
-		if err := db.DropOkidociDB(e.PgPassword); err != nil {
-			log.Printf("[DB] ERROR: DropOkidociDB failed: %v", err)
-			return fmt.Errorf("failed to drop okidoci_db: %w", err)
-		}
-		log.Printf("[DB] okidoci_db dropped successfully")
-		
-		if err := db.DropCyberstabRoles(e.PgPassword); err != nil {
-			log.Printf("[DB] ERROR: DropCyberstabRoles failed: %v", err)
-			// Continue - dbupdater will create roles anyway
-		} else {
-			log.Printf("[DB] All Cyberstab roles dropped successfully")
-		}
-		
-		// Give PostgreSQL time to clean up
-		time.Sleep(1 * time.Second)
-		
-		log.Printf("[DB] =========================================")
-		log.Printf("[DB] Database cleanup completed successfully")
-		log.Printf("[DB] =========================================")
-		
+
 		// Step 4.3: Run dbupdater - it will create database and roles from scratch
 		return runDbUpdaterBestEffort(dbUpdaterRunOptions{
 			InstallDir: installDir,
 			DBMode:     e.Options.DBMode,
 			RestoreSQL: strings.TrimSpace(e.Options.DBRestoreFile),
+			PGUser:     strings.TrimSpace(e.PgUser),
 			PGPassword: strings.TrimSpace(e.PgPassword),
+			Cancel:     e.CancelCh,
 		}, func(pct int, status string) {
 			if e.ProgressEmitter != nil {
 				e.ProgressEmitter(pct, status)
 			}
 		})
-	}); err != nil {
-		return err
+		}); err != nil {
+			return err
+		}
 	}
 
 	// 5) Finish
-	if err := step(4, func() error {
-		// 5.1) Drop embedded uninstaller into install dir.
-		if runtime.GOOS == "windows" && len(e.UninstallerData) > 0 {
-			unPath := filepath.Join(e.InstallDir, "cyberstab-uninstaller.exe")
-			_ = os.WriteFile(unPath, e.UninstallerData, 0755)
+	if err := nextStep(func() error {
+		// 5.1) Verify/update embedded uninstaller in install dir.
+		if err := e.writeEmbeddedUninstallerWindows(); err != nil {
+			return err
 		}
 
 		// 5.2) Register apps in Windows "Programs and Features".
@@ -350,9 +510,9 @@ func (e *Engine) run() error {
 			// Register only selected components
 			hasServer := e.Options.Components.InstallServer || e.Options.Components.InstallDB
 			hasClient := e.Options.Components.InstallClients
-			
+
 			_ = registerCyberstabAppsWindows(e.InstallDir, hasServer, hasClient)
-			
+
 			// Clean up old registry entries if component was deselected
 			if !hasServer {
 				_ = removeUninstallEntryWindows("CyberstabServer")
@@ -373,11 +533,11 @@ func (e *Engine) run() error {
 			if e.ProgressEmitter != nil {
 				e.ProgressEmitter(90, "Настройка автозапуска сервера…")
 			}
-			
+
 			// Server executable is in server subfolder
 			serverExe := filepath.Join(e.InstallDir, "CyberstabServerWindows", "server", "CyberstabServerWindows.exe")
 			serverConsole := filepath.Join(e.InstallDir, "CyberstabServerWindows", "serverconsole", "serverconsole.exe")
-			
+
 			// Try server.exe first, fallback to serverconsole.exe
 			serverPath := ""
 			if _, statErr := os.Stat(serverExe); statErr == nil {
@@ -385,24 +545,24 @@ func (e *Engine) run() error {
 			} else if _, statErr := os.Stat(serverConsole); statErr == nil {
 				serverPath = serverConsole
 			}
-			
+
 			if serverPath != "" {
 				// Create autostart task using the server executable
 				if err := ensureServerAutostartWindows(e.InstallDir, serverPath); err != nil {
 					if e.ProgressEmitter != nil {
-						e.ProgressEmitter(92, "Автозапуск: " + err.Error())
+						e.ProgressEmitter(92, "Автозапуск: "+err.Error())
 					}
 				} else {
 					if e.ProgressEmitter != nil {
 						e.ProgressEmitter(93, "Автозапуск создан")
 					}
 				}
-				
+
 				// ALWAYS start the server directly (not dependent on any flag)
 				if e.ProgressEmitter != nil {
 					e.ProgressEmitter(95, "Запуск сервера…")
 				}
-				
+
 				// Start server with proper working directory
 				cmd := exec.Command(serverPath)
 				cmd.Dir = filepath.Dir(serverPath)
@@ -410,10 +570,10 @@ func (e *Engine) run() error {
 					HideWindow:    true,
 					CreationFlags: 0x00000008 | 0x08000000, // DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
 				}
-				
+
 				if err := cmd.Start(); err != nil {
 					if e.ProgressEmitter != nil {
-						e.ProgressEmitter(96, "Ошибка запуска: " + err.Error())
+						e.ProgressEmitter(96, "Ошибка запуска: "+err.Error())
 					}
 					return fmt.Errorf("не удалось запустить сервер: %w", err)
 				} else {
@@ -488,7 +648,15 @@ func InstallPostgresFromSource(sourceRoot string) error {
 	if runtime.GOOS == "windows" {
 		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	}
-	return cmd.Start()
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	registerInstallerProcess(cmd.Process)
+	go func() {
+		_ = cmd.Wait()
+		unregisterInstallerProcess(cmd.Process)
+	}()
+	return nil
 }
 
 func selectTopLevelDirs(root string, prefixes []string) ([]string, error) {
@@ -592,25 +760,83 @@ func runQuiet(exe string, args ...string) error {
 	return nil
 }
 
+var installerProcessRegistry = struct {
+	sync.Mutex
+	processes map[int]*os.Process
+}{
+	processes: make(map[int]*os.Process),
+}
+
+func registerInstallerProcess(p *os.Process) {
+	if p == nil {
+		return
+	}
+	installerProcessRegistry.Lock()
+	installerProcessRegistry.processes[p.Pid] = p
+	installerProcessRegistry.Unlock()
+}
+
+func unregisterInstallerProcess(p *os.Process) {
+	if p == nil {
+		return
+	}
+	installerProcessRegistry.Lock()
+	delete(installerProcessRegistry.processes, p.Pid)
+	installerProcessRegistry.Unlock()
+}
+
+func CancelActiveInstallerProcesses() {
+	installerProcessRegistry.Lock()
+	var processes []*os.Process
+	for _, p := range installerProcessRegistry.processes {
+		processes = append(processes, p)
+	}
+	installerProcessRegistry.Unlock()
+
+	for _, p := range processes {
+		killProcessTree(p)
+	}
+
+	if runtime.GOOS == "windows" {
+		for _, name := range []string{"dbupdater.exe", "CyberstabDbUpdaterWindows.exe", "postgresql.exe"} {
+			_ = runHidden("taskkill.exe", "/F", "/IM", name, "/T")
+		}
+	}
+}
+
+func killProcessTree(p *os.Process) {
+	if p == nil {
+		return
+	}
+	if runtime.GOOS == "windows" {
+		_ = runHidden("taskkill.exe", "/F", "/PID", strconv.Itoa(p.Pid), "/T")
+		return
+	}
+	_ = p.Kill()
+}
+
 type dbUpdaterRunOptions struct {
 	InstallDir string
 	DBMode     DBMode
 	RestoreSQL string
+	PGUser     string
 	PGPassword string
+	Cancel     <-chan struct{}
 }
 
 func runDbUpdaterBestEffort(opts dbUpdaterRunOptions, emit func(pct int, status string)) error {
-	installDir := strings.TrimSpace(opts.InstallDir)
-	dbu, err := findDbUpdater(installDir)
-	if err != nil {
-		return err
-	}
 	// If user requested to keep DB, do not run updater.
 	if opts.DBMode == DBModeKeep {
 		if emit != nil {
 			emit(100, "БД: пропуск (оставить текущую)")
 		}
 		return nil
+	}
+
+	installDir := strings.TrimSpace(opts.InstallDir)
+	dbu, err := findDbUpdater(installDir)
+	if err != nil {
+		return err
 	}
 
 	if emit != nil {
@@ -625,31 +851,32 @@ func runDbUpdaterBestEffort(opts dbUpdaterRunOptions, emit func(pct int, status 
 		if emit != nil {
 			emit(10, "Восстановление БД из .sql…")
 		}
-		// If DB exists, make a backup before restore (best-effort).
-		_ = backupOkidociDbIfExistsWindows(opts.PGPassword, installDir)
-		if err := runDbUpdaterOnce(dbu, installDir, []string{"-qr", opts.RestoreSQL}, opts.PGPassword, emit, 2*time.Hour, "Восстановление БД…"); err != nil {
+		if err := runDbUpdaterOnce(dbu, installDir, []string{"-qr", opts.RestoreSQL}, opts.PGUser, opts.PGPassword, emit, 2*time.Hour, "Восстановление БД…", opts.Cancel); err != nil {
 			return err
 		}
 		// After restore, apply updates.
 		if emit != nil {
 			emit(60, "Применение обновлений БД…")
 		}
-		return runDbUpdaterOnce(dbu, installDir, []string{"-qu"}, opts.PGPassword, emit, 2*time.Hour, "Обновление БД…")
+		return runDbUpdaterOnce(dbu, installDir, []string{"-qu"}, opts.PGUser, opts.PGPassword, emit, 2*time.Hour, "Обновление БД…", opts.Cancel)
 	}
 
 	// Default/new/recreate: run update (-qu).
 	if emit != nil {
 		emit(10, "Создание/обновление БД…")
 	}
-	
+
 	// Run dbupdater - it will create database and roles from scratch
-	return runDbUpdaterOnce(dbu, installDir, []string{"-qu"}, opts.PGPassword, emit, 2*time.Hour, "Инициализация БД…")
+	return runDbUpdaterOnce(dbu, installDir, []string{"-qu"}, opts.PGUser, opts.PGPassword, emit, 2*time.Hour, "Инициализация БД…", opts.Cancel)
 }
 
-func runDbUpdaterOnce(exePath string, installDir string, args []string, pgPassword string, emit func(pct int, status string), timeout time.Duration, tickStatus string) error {
+func runDbUpdaterOnce(exePath string, installDir string, args []string, pgUser, pgPassword string, emit func(pct int, status string), timeout time.Duration, tickStatus string, cancel <-chan struct{}) error {
 	cmd := exec.Command(exePath, args...)
 	cmd.Dir = filepath.Dir(exePath)
 	cmd.Env = os.Environ()
+	if u := strings.TrimSpace(pgUser); u != "" {
+		cmd.Env = append(cmd.Env, "PGUSER="+u)
+	}
 	if strings.TrimSpace(pgPassword) != "" {
 		cmd.Env = append(cmd.Env, "PGPASSWORD="+pgPassword)
 	}
@@ -668,6 +895,8 @@ func runDbUpdaterOnce(exePath string, installDir string, args []string, pgPasswo
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("dbupdater: не удалось запустить: %w", err)
 	}
+	registerInstallerProcess(cmd.Process)
+	defer unregisterInstallerProcess(cmd.Process)
 
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
@@ -683,6 +912,9 @@ func runDbUpdaterOnce(exePath string, installDir string, args []string, pgPasswo
 				return fmt.Errorf("dbupdater: ошибка: %v\n%s", err, strings.TrimSpace(out.String()))
 			}
 			return nil
+		case <-cancel:
+			killProcessTree(cmd.Process)
+			return fmt.Errorf("dbupdater: отменено пользователем")
 		case <-ticker.C:
 			if emit != nil {
 				el := time.Since(start)
@@ -850,6 +1082,55 @@ func is64BitLinux() bool {
 	return strings.Contains(arch, "64") || strings.Contains(arch, "x86_64") || strings.Contains(arch, "aarch64")
 }
 
+func verifyExistingInstallation(installDir string, components ComponentsOptions) error {
+	var missing []string
+	if runtime.GOOS == "windows" {
+		if components.InstallServer || components.InstallDB {
+			serverDir := filepath.Join(installDir, "CyberstabServerWindows")
+			if st, err := os.Stat(serverDir); err != nil || !st.IsDir() {
+				missing = append(missing, "CyberstabServerWindows")
+			} else if components.InstallDB {
+				if _, err := findDbUpdater(installDir); err != nil {
+					missing = append(missing, "dbupdater (в CyberstabServerWindows)")
+				}
+			}
+		}
+		if components.InstallClients {
+			clientDir := ""
+			if is64BitWindows() {
+				clientDir = filepath.Join(installDir, "CyberstabClientWindows64")
+			} else {
+				clientDir = filepath.Join(installDir, "CyberstabClientWindows32")
+			}
+			if st, err := os.Stat(clientDir); err != nil || !st.IsDir() {
+				missing = append(missing, filepath.Base(clientDir))
+			}
+		}
+	} else {
+		if components.InstallServer || components.InstallDB {
+			serverDir := filepath.Join(installDir, "CyberstabServerLinux")
+			if st, err := os.Stat(serverDir); err != nil || !st.IsDir() {
+				missing = append(missing, "CyberstabServerLinux")
+			}
+		}
+		if components.InstallClients {
+			clientDir := ""
+			if is64BitLinux() {
+				clientDir = filepath.Join(installDir, "CyberstabClientLinux64")
+			} else {
+				clientDir = filepath.Join(installDir, "CyberstabClientLinux32")
+			}
+			if st, err := os.Stat(clientDir); err != nil || !st.IsDir() {
+				missing = append(missing, filepath.Base(clientDir))
+			}
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("в папке установки не найдены компоненты: %s. Выберите «Переустановить» или скопируйте дистрибутив вручную", strings.Join(missing, ", "))
+	}
+	return nil
+}
+
 // cleanOldInstallationFolders removes old Cyberstab folders before reinstall
 func cleanOldInstallationFolders(installDir string) error {
 	// List of folders to clean
@@ -862,7 +1143,7 @@ func cleanOldInstallationFolders(installDir string) error {
 		"CyberstabClientLinux64",
 		"dbupdater",
 	}
-	
+
 	for _, folder := range folders {
 		path := filepath.Join(installDir, folder)
 		if _, err := os.Stat(path); err == nil {
@@ -877,7 +1158,7 @@ func cleanOldInstallationFolders(installDir string) error {
 			}
 		}
 	}
-	
+
 	return nil
 }
 
@@ -886,35 +1167,35 @@ func stopCyberstabProcesses() error {
 	if runtime.GOOS != "windows" {
 		return nil
 	}
-	
+
 	// First, try to stop the scheduled task if it's running
 	_ = runHidden("schtasks.exe", "/End", "/TN", "CyberstabServer")
 	time.Sleep(300 * time.Millisecond)
-	
+
 	// List of process names to terminate (order matters - stop server first)
 	processNames := []string{
-		"CyberstabServerWindows.exe",  // Main server
-		"serverconsole.exe",            // Server console
-		"CyberstabClientWindows.exe",   // Client
+		"CyberstabServerWindows.exe", // Main server
+		"serverconsole.exe",          // Server console
+		"CyberstabClientWindows.exe", // Client
 	}
-	
+
 	for _, procName := range processNames {
 		// Use taskkill to terminate processes
 		cmd := exec.Command("taskkill.exe", "/F", "/IM", procName, "/T")
 		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-		_ = cmd.Run() // Best effort, ignore errors
+		_ = cmd.Run()                      // Best effort, ignore errors
 		time.Sleep(200 * time.Millisecond) // Give each process time to exit
 	}
-	
+
 	// Also try to stop Java processes that are running from Cyberstab directory
 	// This is more aggressive - only if other processes didn't stop
 	cmd := exec.Command("taskkill.exe", "/F", "/IM", "java.exe", "/T")
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	_ = cmd.Run()
-	
+
 	// Give processes a moment to release file handles
 	time.Sleep(500 * time.Millisecond)
-	
+
 	return nil
 }
 
@@ -923,29 +1204,29 @@ func createEmptyOkidociDB(pgPassword string) error {
 	if runtime.GOOS != "windows" {
 		return nil
 	}
-	
+
 	info, err := db.CheckPostgres()
 	if err != nil || info == nil || !info.Installed {
 		return fmt.Errorf("PostgreSQL not found: %v", err)
 	}
-	
+
 	psql := filepath.Join(info.BinDir, "psql")
 	if runtime.GOOS == "windows" {
 		psql += ".exe"
 	}
-	
+
 	// Helper to run psql
 	runPsql := func(dbName, sql string) error {
 		cmd := exec.Command(psql, "-U", "postgres", "-d", dbName, "-c", sql)
 		cmd.Env = append(os.Environ(), "PGPASSWORD="+pgPassword)
 		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-		
+
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout = &stdout
 		cmd.Stderr = &stderr
-		
+
 		log.Printf("[DB] Running on %s: %s", dbName, sql)
-		
+
 		if err := cmd.Run(); err != nil {
 			log.Printf("[DB] ERROR: %v", err)
 			if stderr.Len() > 0 {
@@ -953,32 +1234,32 @@ func createEmptyOkidociDB(pgPassword string) error {
 			}
 			return err
 		}
-		
+
 		if stdout.Len() > 0 {
 			log.Printf("[DB] stdout: %s", strings.TrimSpace(stdout.String()))
 		}
 		return nil
 	}
-	
+
 	// Step 1: Create database
 	log.Printf("[DB] Creating okidoci_db...")
 	if err := runPsql("postgres", "CREATE DATABASE okidoci_db;"); err != nil {
 		log.Printf("[DB] Warning: CREATE DATABASE failed (may already exist): %v", err)
 	}
-	
+
 	// Step 2: Create basic roles with passwords from server.properties if available
 	// Otherwise use defaults - dbupdater will update them
 	log.Printf("[DB] Creating basic roles...")
-	
+
 	// Try to read passwords from server.properties
 	installDir := installDirOrDefault("")
 	serverPropsPath := filepath.Join(installDir, "server.properties")
 	props := readServerProperties(serverPropsPath)
-	
+
 	adminPass := props["okidoci.admin.password"]
-	servicePass := props["okidoci.service_user.password"] 
+	servicePass := props["okidoci.service_user.password"]
 	usersPass := props["okidoci.users.password"]
-	
+
 	// Fallback to defaults if not found
 	if adminPass == "" {
 		adminPass = "admin"
@@ -989,10 +1270,10 @@ func createEmptyOkidociDB(pgPassword string) error {
 	if usersPass == "" {
 		usersPass = "users"
 	}
-	
+
 	log.Printf("[DB] Using admin password: %s", maskPassword(adminPass))
-	
-	roles := []struct{
+
+	roles := []struct {
 		name string
 		pass string
 	}{
@@ -1000,22 +1281,22 @@ func createEmptyOkidociDB(pgPassword string) error {
 		{"okidoci_service_user_name", servicePass},
 		{"okidoci_users", usersPass},
 	}
-	
+
 	for _, role := range roles {
 		// Drop if exists, then create
 		_ = runPsql("postgres", fmt.Sprintf("DROP ROLE IF EXISTS %s;", role.name))
-		
+
 		createSQL := fmt.Sprintf("CREATE ROLE %s WITH LOGIN PASSWORD '%s';", role.name, role.pass)
 		if err := runPsql("postgres", createSQL); err != nil {
 			log.Printf("[DB] Warning: Failed to create role %s: %v", role.name, err)
 		}
 	}
-	
+
 	// Grant connect privilege
 	if err := runPsql("postgres", "GRANT ALL PRIVILEGES ON DATABASE okidoci_db TO okidoci_admin;"); err != nil {
 		log.Printf("[DB] Warning: GRANT failed: %v", err)
 	}
-	
+
 	log.Printf("[DB] Empty database created successfully")
 	return nil
 }
@@ -1099,7 +1380,7 @@ func setClientFolderPermissionsWindows(installDir string) error {
 
 		// Method 1: Use PowerShell with Get-Acl/Set-Acl
 		log.Printf("[PERMS] [%d/%d] Method 1: Using PowerShell...", i+1, len(clientDirs))
-		
+
 		psScript := fmt.Sprintf(`
 			$ErrorActionPreference = "Continue"
 			$path = "%s"
@@ -1136,19 +1417,19 @@ func setClientFolderPermissionsWindows(installDir string) error {
 			
 			Write-Host "Permissions set successfully"
 		`, clientDir)
-		
+
 		cmd := exec.Command("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", psScript)
 		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 		var out bytes.Buffer
 		cmd.Stdout = &out
 		cmd.Stderr = &out
-		
+
 		if err := cmd.Run(); err != nil {
 			log.Printf("[PERMS] [%d/%d] PowerShell failed: %v", i+1, len(clientDirs), err)
 			if out.Len() > 0 {
 				log.Printf("[PERMS] [%d/%d] PowerShell output: %s", i+1, len(clientDirs), strings.TrimSpace(out.String()))
 			}
-			
+
 			// Method 2: Fallback to icacls.exe
 			log.Printf("[PERMS] [%d/%d] Method 2: Using icacls.exe fallback...", i+1, len(clientDirs))
 			cmd = exec.Command("icacls.exe", clientDir, "/grant:r", "Everyone:(OI)(CI)(F)", "/T", "/C")
@@ -1156,7 +1437,7 @@ func setClientFolderPermissionsWindows(installDir string) error {
 			out.Reset()
 			cmd.Stdout = &out
 			cmd.Stderr = &out
-			
+
 			if err := cmd.Run(); err != nil {
 				log.Printf("[PERMS] [%d/%d] ERROR: Both PowerShell and icacls failed", i+1, len(clientDirs))
 				if out.Len() > 0 {
@@ -1171,7 +1452,7 @@ func setClientFolderPermissionsWindows(installDir string) error {
 				log.Printf("[PERMS] [%d/%d] PowerShell output: %s", i+1, len(clientDirs), strings.TrimSpace(out.String()))
 			}
 		}
-		
+
 		flushLog()
 
 		// Verify permissions
@@ -1210,22 +1491,22 @@ func flushLog() {
 // runCmdWithOutputArgs runs a command and logs stdout/stderr
 func runCmdWithOutputArgs(cmd *exec.Cmd, prefix string) error {
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	
+
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	
+
 	log.Printf("%s Running: %s %v", prefix, cmd.Path, cmd.Args)
-	
+
 	err := cmd.Run()
-	
+
 	if stdout.Len() > 0 {
 		log.Printf("%s stdout: %s", prefix, strings.TrimSpace(stdout.String()))
 	}
 	if stderr.Len() > 0 {
 		log.Printf("%s stderr: %s", prefix, strings.TrimSpace(stderr.String()))
 	}
-	
+
 	return err
 }
 
@@ -1236,12 +1517,14 @@ func registerCyberstabAppsWindows(installDir string, hasServer bool, hasClient b
 	// Creates two entries: server and client, if corresponding folders exist.
 	if hasServer {
 		ver := detectJavaVersion(filepath.Join(installDir, "CyberstabServerWindows", "java"))
-		_ = writeUninstallEntryWindows("CyberstabServer", "Киберстаб (сервер)", ver, installDir, filepath.Join(installDir, "cyberstab-uninstaller.exe")+" -y")
+		uninstallerPath := filepath.Join(installDir, "cyberstab-uninstaller.exe")
+		_ = writeUninstallEntryWindows("CyberstabServer", "Киберстаб (сервер)", ver, installDir, `"`+uninstallerPath+`" -y`, uninstallerPath)
 	}
 	if hasClient {
 		clientDir := DetectClientDirWindows(installDir)
 		ver := detectJavaVersion(filepath.Join(clientDir, "java"))
-		_ = writeUninstallEntryWindows("CyberstabClient", "Киберстаб (клиент)", ver, installDir, filepath.Join(installDir, "cyberstab-uninstaller.exe")+" -y")
+		uninstallerPath := filepath.Join(installDir, "cyberstab-uninstaller.exe")
+		_ = writeUninstallEntryWindows("CyberstabClient", "Киберстаб (клиент)", ver, installDir, `"`+uninstallerPath+`" -y`, uninstallerPath)
 	}
 	return nil
 }
@@ -1252,7 +1535,7 @@ func removeUninstallEntryWindows(keyName string) error {
 	return runHidden("reg.exe", "DELETE", base, "/f")
 }
 
-func writeUninstallEntryWindows(keyName string, displayName string, version string, installDir string, uninstallCmd string) error {
+func writeUninstallEntryWindows(keyName string, displayName string, version string, installDir string, uninstallCmd string, iconPath string) error {
 	base := `HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\` + keyName
 	// Minimal fields from your screenshot.
 	_ = runHidden("reg.exe", "ADD", base, "/f")
@@ -1264,8 +1547,11 @@ func writeUninstallEntryWindows(keyName string, displayName string, version stri
 	_ = runHidden("reg.exe", "ADD", base, "/v", "InstallLocation", "/t", "REG_SZ", "/d", installDir, "/f")
 	_ = runHidden("reg.exe", "ADD", base, "/v", "HelpLink", "/t", "REG_SZ", "/d", "https://kiberstab.ru/", "/f")
 	_ = runHidden("reg.exe", "ADD", base, "/v", "URLInfoAbout", "/t", "REG_SZ", "/d", "https://kiberstab.ru/", "/f")
-	_ = runHidden("reg.exe", "ADD", base, "/v", "UninstallString", "/t", "REG_SZ", "/d", `"`+uninstallCmd+`"`, "/f")
-	_ = runHidden("reg.exe", "ADD", base, "/v", "QuietUninstallString", "/t", "REG_SZ", "/d", `"`+uninstallCmd+`"`, "/f")
+	if strings.TrimSpace(iconPath) != "" {
+		_ = runHidden("reg.exe", "ADD", base, "/v", "DisplayIcon", "/t", "REG_SZ", "/d", `"`+iconPath+`",0`, "/f")
+	}
+	_ = runHidden("reg.exe", "ADD", base, "/v", "UninstallString", "/t", "REG_SZ", "/d", uninstallCmd, "/f")
+	_ = runHidden("reg.exe", "ADD", base, "/v", "QuietUninstallString", "/t", "REG_SZ", "/d", uninstallCmd, "/f")
 	return nil
 }
 
@@ -1339,14 +1625,14 @@ func createClientDesktopShortcutWindows(installDir string) error {
 	if clientDir == "" {
 		return fmt.Errorf("client directory not found")
 	}
-	
+
 	targetExe := FindClientExeBestEffort(clientDir)
 	if targetExe == "" {
 		return fmt.Errorf("client executable not found in %s", clientDir)
 	}
-	
+
 	log.Printf("[SHORTCUT] Creating shortcut for client: %s", targetExe)
-	
+
 	// Get public desktop (common for all users)
 	desktop := os.Getenv("PUBLIC")
 	if desktop == "" {
@@ -1354,16 +1640,16 @@ func createClientDesktopShortcutWindows(installDir string) error {
 	} else {
 		desktop = filepath.Join(desktop, "Desktop")
 	}
-	
+
 	// Ensure desktop directory exists
 	if err := os.MkdirAll(desktop, 0755); err != nil {
 		return fmt.Errorf("failed to create desktop directory: %w", err)
 	}
-	
+
 	lnk := filepath.Join(desktop, "Киберстаб.lnk")
-	
+
 	log.Printf("[SHORTCUT] Desktop path: %s", lnk)
-	
+
 	// Create shortcut with icon
 	ps := fmt.Sprintf(`
 		$W = New-Object -ComObject WScript.Shell;
@@ -1374,13 +1660,13 @@ func createClientDesktopShortcutWindows(installDir string) error {
 		$S.Description = 'Киберстаб Клиент';
 		$S.Save();
 	`, escapePS(lnk), escapePS(targetExe), escapePS(filepath.Dir(targetExe)), escapePS(targetExe))
-	
+
 	if err := runHidden("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps); err != nil {
 		return fmt.Errorf("failed to create shortcut: %w", err)
 	}
-	
+
 	log.Printf("[SHORTCUT] Shortcut created, setting permissions...")
-	
+
 	// Method 1: Use icacls through cmd.exe to grant Read permissions to Users
 	cmdLine := fmt.Sprintf(`icacls.exe "%s" /grant:r *S-1-5-32-545:(R) /Q`, lnk)
 	cmd := exec.Command("cmd.exe", "/C", cmdLine)
@@ -1388,13 +1674,13 @@ func createClientDesktopShortcutWindows(installDir string) error {
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
-	
+
 	if err := cmd.Run(); err != nil {
 		log.Printf("[SHORTCUT] icacls Users failed: %v", err)
 		if out.Len() > 0 {
 			log.Printf("[SHORTCUT] icacls output: %s", strings.TrimSpace(out.String()))
 		}
-		
+
 		// Method 2: Try Everyone
 		cmdLine = fmt.Sprintf(`icacls.exe "%s" /grant:r Everyone:(R) /Q`, lnk)
 		cmd = exec.Command("cmd.exe", "/C", cmdLine)
@@ -1402,7 +1688,7 @@ func createClientDesktopShortcutWindows(installDir string) error {
 		out.Reset()
 		cmd.Stdout = &out
 		cmd.Stderr = &out
-		
+
 		if err := cmd.Run(); err != nil {
 			log.Printf("[SHORTCUT] icacls Everyone failed: %v", err)
 			if out.Len() > 0 {
@@ -1414,12 +1700,12 @@ func createClientDesktopShortcutWindows(installDir string) error {
 	} else {
 		log.Printf("[SHORTCUT] Permissions set via Users group")
 	}
-	
+
 	// Verify the file exists and check its ACL
 	if info, err := os.Stat(lnk); err == nil {
 		log.Printf("[SHORTCUT] Shortcut file exists, size: %d bytes", info.Size())
 	}
-	
+
 	log.Printf("[SHORTCUT] Shortcut creation completed")
 	return nil
 }
@@ -1430,11 +1716,11 @@ func FindClientExeBestEffort(clientDir string) string {
 	// 1. Files with "client" in name
 	// 2. Any .exe in the root of clientDir
 	// 3. Any .exe at depth 1
-	
+
 	var priorityHits []string
 	var rootExe []string
 	var depth1Exe []string
-	
+
 	_ = filepath.WalkDir(clientDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d == nil {
 			if d != nil && d.IsDir() {
@@ -1442,15 +1728,15 @@ func FindClientExeBestEffort(clientDir string) string {
 			}
 			return nil
 		}
-		
+
 		rel, _ := filepath.Rel(clientDir, path)
 		depth := strings.Count(rel, string(os.PathSeparator))
-		
+
 		// Don't go deeper than 2 levels
 		if depth > 2 {
 			return filepath.SkipDir
 		}
-		
+
 		if d.IsDir() {
 			// Skip java and other large directories
 			name := strings.ToLower(d.Name())
@@ -1459,12 +1745,12 @@ func FindClientExeBestEffort(clientDir string) string {
 			}
 			return nil
 		}
-		
+
 		name := strings.ToLower(d.Name())
 		if !strings.HasSuffix(name, ".exe") {
 			return nil
 		}
-		
+
 		// Collect by priority
 		if strings.Contains(name, "client") {
 			priorityHits = append(priorityHits, path)
@@ -1473,10 +1759,10 @@ func FindClientExeBestEffort(clientDir string) string {
 		} else if depth == 1 {
 			depth1Exe = append(depth1Exe, path)
 		}
-		
+
 		return nil
 	})
-	
+
 	// Return by priority
 	if len(priorityHits) > 0 {
 		sort.Strings(priorityHits)
@@ -1490,7 +1776,7 @@ func FindClientExeBestEffort(clientDir string) string {
 		sort.Strings(depth1Exe)
 		return depth1Exe[0]
 	}
-	
+
 	return ""
 }
 
@@ -1499,15 +1785,15 @@ func ensureServerAutostartWindows(installDir string, serverPath string) error {
 	if _, err := os.Stat(serverPath); err != nil {
 		return fmt.Errorf("сервер не найден: %w", err)
 	}
-	
+
 	taskName := "CyberstabServer"
 	// Quote the path to handle spaces correctly.
 	tr := fmt.Sprintf(`"%s"`, serverPath)
-	
+
 	// Delete old task if exists (ensures clean state)
 	_ = runHidden("schtasks.exe", "/Delete", "/TN", taskName, "/F")
 	time.Sleep(300 * time.Millisecond)
-	
+
 	// Create new task to run at startup with highest privileges.
 	// Use SYSTEM account to avoid user/session issues.
 	err := runHidden(
@@ -1523,19 +1809,19 @@ func ensureServerAutostartWindows(installDir string, serverPath string) error {
 	if err != nil {
 		return fmt.Errorf("не удалось создать задачу автозапуска: %w", err)
 	}
-	
+
 	// Verify task was created
 	var out bytes.Buffer
 	cmd := exec.Command("schtasks.exe", "/Query", "/TN", taskName, "/V", "/FO", "LIST")
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	cmd.Stdout = &out
 	cmd.Stderr = &out
-	
+
 	if err := cmd.Run(); err == nil {
 		// Task exists
 		return nil
 	}
-	
+
 	return fmt.Errorf("задача создана, но не найдена при проверке")
 }
 
@@ -1632,13 +1918,13 @@ func startServerTaskWindows() error {
 			time.Sleep(2 * time.Second)
 			return nil
 		}
-		
+
 		// If first attempt fails, wait a bit and retry
 		if i < 2 {
 			time.Sleep(1 * time.Second)
 		}
 	}
-	
+
 	return fmt.Errorf("не удалось запустить задачу CyberstabServer после 3 попыток")
 }
 
@@ -1690,20 +1976,19 @@ func runCmdWithTimeout(timeout time.Duration, exe string, args ...string) (strin
 	}
 }
 
-func backupOkidociDbIfExistsWindows(pgPassword string, installDir string) error {
+func backupOkidociDbIfExistsWindows(pgUser, pgPassword string, installDir string) error {
 	if runtime.GOOS != "windows" {
 		return nil
 	}
 	if strings.TrimSpace(pgPassword) == "" {
-		return fmt.Errorf("backup: нужен пароль postgres для бэкапа")
+		return fmt.Errorf("backup: нужен пароль PostgreSQL для резервного копирования")
 	}
-	exists, err := db.OkidociDatabaseExists(pgPassword)
+	exists, err := db.OkidociDatabaseExists(pgUser, pgPassword)
 	if err != nil || !exists {
 		return nil
 	}
 	ts := time.Now().Format("20060102_150405")
 	outDir := filepath.Join(installDir, "backups", "db")
 	outFile := filepath.Join(outDir, "okidoci_db_"+ts+".sql")
-	return db.DumpDatabaseSQL(pgPassword, "okidoci_db", outFile)
+	return db.DumpDatabaseSQL(pgUser, pgPassword, "okidoci_db", outFile)
 }
-

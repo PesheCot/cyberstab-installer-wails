@@ -16,6 +16,63 @@ export namespace main {
 	        this.postgresInstalled = source["postgresInstalled"];
 	    }
 	}
+	export class DbEngineDTO {
+	    kind: string;
+	    label: string;
+	    binDir: string;
+	    isManual: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new DbEngineDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.label = source["label"];
+	        this.binDir = source["binDir"];
+	        this.isManual = source["isManual"];
+	    }
+	}
+	export class DbCheckResult {
+	    engines: DbEngineDTO[];
+	    installed: boolean;
+	    installerFound: boolean;
+	    installerPath: string;
+	    activeEngineKind: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DbCheckResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.engines = this.convertValues(source["engines"], DbEngineDTO);
+	        this.installed = source["installed"];
+	        this.installerFound = source["installerFound"];
+	        this.installerPath = source["installerPath"];
+	        this.activeEngineKind = source["activeEngineKind"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
 	export class InstallDirConflict {
 	    exists: boolean;
 	
@@ -38,22 +95,6 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.exists = source["exists"];
-	    }
-	}
-	export class PgCheckResult {
-	    installed: boolean;
-	    installerFound: boolean;
-	    installerPath: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new PgCheckResult(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.installed = source["installed"];
-	        this.installerFound = source["installerFound"];
-	        this.installerPath = source["installerPath"];
 	    }
 	}
 	export class ServerStatusDTO {
@@ -118,6 +159,8 @@ export namespace main {
 	    installClients: boolean;
 	    installDB: boolean;
 	    sourceRoot: string;
+	    dbEngine: string;
+	    postgresUser: string;
 	    postgresPassword: string;
 	    installDir: string;
 	    dbAction: string;
@@ -134,6 +177,8 @@ export namespace main {
 	        this.installClients = source["installClients"];
 	        this.installDB = source["installDB"];
 	        this.sourceRoot = source["sourceRoot"];
+	        this.dbEngine = source["dbEngine"];
+	        this.postgresUser = source["postgresUser"];
 	        this.postgresPassword = source["postgresPassword"];
 	        this.installDir = source["installDir"];
 	        this.dbAction = source["dbAction"];
@@ -143,6 +188,8 @@ export namespace main {
 	}
 	export class UninstallOptions {
 	    installDir: string;
+	    dbEngine: string;
+	    postgresUser: string;
 	    postgresPassword: string;
 	    skipDB: boolean;
 	
@@ -153,6 +200,8 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.installDir = source["installDir"];
+	        this.dbEngine = source["dbEngine"];
+	        this.postgresUser = source["postgresUser"];
 	        this.postgresPassword = source["postgresPassword"];
 	        this.skipDB = source["skipDB"];
 	    }

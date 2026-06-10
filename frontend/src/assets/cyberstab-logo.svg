@@ -1,0 +1,18 @@
+<svg preserveAspectRatio="none" width="100%" height="100%" overflow="visible" style="display: block;" viewBox="0 0 38 38" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="Group">
+<path id="Vector" d="M32.4526 0H5.54743C2.48367 0 0 2.48367 0 5.54743V32.4526C0 35.5163 2.48367 38 5.54743 38H32.4526C35.5163 38 38 35.5163 38 32.4526V5.54743C38 2.48367 35.5163 0 32.4526 0Z" fill="var(--fill-0, white)"/>
+<path id="Vector_2" d="M14.4853 12.2405H17.0379V17.2749H18.163L21.3408 12.2405H24.215L20.2697 18.2116L24.5726 24.7376H21.555L18.1635 19.4176H17.0385V24.7376H14.4858V12.2405H14.4853Z" fill="var(--fill-0, black)"/>
+<path id="Vector_3" d="M31.053 6.46354H6.94751V9.47316H31.053V6.46354Z" fill="url(#paint0_linear_0_47)"/>
+<path id="Vector_4" d="M6.94751 24.0526H9.91058V27.1701L18.9997 30.8081L28.0894 27.1701V24.0526H31.0525V28.9711L18.9997 33.9912L6.94751 28.9711V24.0526Z" fill="url(#paint1_linear_0_47)"/>
+</g>
+<defs>
+<linearGradient id="paint0_linear_0_47" x1="6.94751" y1="7.96835" x2="31.0525" y2="7.96835" gradientUnits="userSpaceOnUse">
+<stop stop-color="#44D4F7"/>
+<stop offset="1" stop-color="#3457E7"/>
+</linearGradient>
+<linearGradient id="paint1_linear_0_47" x1="-2.45184e-08" y1="29.0219" x2="0.0528931" y2="29.0219" gradientUnits="userSpaceOnUse">
+<stop stop-color="#44D4F7"/>
+<stop offset="1" stop-color="#3457E7"/>
+</linearGradient>
+</defs>
+</svg>

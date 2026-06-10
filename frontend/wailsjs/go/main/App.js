@@ -10,16 +10,20 @@ export function BeforeClose(arg1) {
   return window['go']['main']['App']['BeforeClose'](arg1);
 }
 
+export function CancelInstall() {
+  return window['go']['main']['App']['CancelInstall']();
+}
+
+export function CheckDbInstalled() {
+  return window['go']['main']['App']['CheckDbInstalled']();
+}
+
 export function CheckInstallDirConflict(arg1) {
   return window['go']['main']['App']['CheckInstallDirConflict'](arg1);
 }
 
-export function CheckOkidociDB(arg1) {
-  return window['go']['main']['App']['CheckOkidociDB'](arg1);
-}
-
-export function CheckPgInstalled() {
-  return window['go']['main']['App']['CheckPgInstalled']();
+export function CheckOkidociDB(arg1, arg2) {
+  return window['go']['main']['App']['CheckOkidociDB'](arg1, arg2);
 }
 
 export function DomReady(arg1) {
@@ -54,24 +58,32 @@ export function LaunchClient(arg1) {
   return window['go']['main']['App']['LaunchClient'](arg1);
 }
 
-export function PickFolder() {
-  return window['go']['main']['App']['PickFolder']();
+export function PickDbDir() {
+  return window['go']['main']['App']['PickDbDir']();
 }
 
-export function PickPgDir() {
-  return window['go']['main']['App']['PickPgDir']();
+export function PickFolder() {
+  return window['go']['main']['App']['PickFolder']();
 }
 
 export function PickSqlFile() {
   return window['go']['main']['App']['PickSqlFile']();
 }
 
-export function ResetPostgresPassword(arg1) {
-  return window['go']['main']['App']['ResetPostgresPassword'](arg1);
+export function PreviewInstallDone() {
+  return window['go']['main']['App']['PreviewInstallDone']();
+}
+
+export function ResetPostgresPassword(arg1, arg2) {
+  return window['go']['main']['App']['ResetPostgresPassword'](arg1, arg2);
 }
 
 export function RestartServer(arg1) {
   return window['go']['main']['App']['RestartServer'](arg1);
+}
+
+export function SelectDbEngine(arg1) {
+  return window['go']['main']['App']['SelectDbEngine'](arg1);
 }
 
 export function Shutdown(arg1) {
@@ -94,6 +106,6 @@ export function Uninstall(arg1) {
   return window['go']['main']['App']['Uninstall'](arg1);
 }
 
-export function VerifyPostgresPassword(arg1) {
-  return window['go']['main']['App']['VerifyPostgresPassword'](arg1);
+export function VerifyPostgresPassword(arg1, arg2) {
+  return window['go']['main']['App']['VerifyPostgresPassword'](arg1, arg2);
 }

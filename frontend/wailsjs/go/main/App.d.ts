@@ -7,11 +7,13 @@ export function AutoDetectSourceRoot(arg1:boolean,arg2:boolean):Promise<string>;
 
 export function BeforeClose(arg1:context.Context):Promise<boolean>;
 
+export function CancelInstall():Promise<void>;
+
+export function CheckDbInstalled():Promise<main.DbCheckResult>;
+
 export function CheckInstallDirConflict(arg1:string):Promise<main.InstallDirConflict>;
 
-export function CheckOkidociDB(arg1:string):Promise<main.OkidociCheckResult>;
-
-export function CheckPgInstalled():Promise<main.PgCheckResult>;
+export function CheckOkidociDB(arg1:string,arg2:string):Promise<main.OkidociCheckResult>;
 
 export function DomReady(arg1:context.Context):Promise<void>;
 
@@ -29,15 +31,19 @@ export function InstallPostgresFromUsb():Promise<void>;
 
 export function LaunchClient(arg1:string):Promise<void>;
 
-export function PickFolder():Promise<string>;
+export function PickDbDir():Promise<string>;
 
-export function PickPgDir():Promise<string>;
+export function PickFolder():Promise<string>;
 
 export function PickSqlFile():Promise<string>;
 
-export function ResetPostgresPassword(arg1:string):Promise<void>;
+export function PreviewInstallDone():Promise<boolean>;
+
+export function ResetPostgresPassword(arg1:string,arg2:string):Promise<void>;
 
 export function RestartServer(arg1:string):Promise<void>;
+
+export function SelectDbEngine(arg1:string):Promise<void>;
 
 export function Shutdown(arg1:context.Context):Promise<void>;
 
@@ -49,4 +55,4 @@ export function StopServer(arg1:string):Promise<void>;
 
 export function Uninstall(arg1:main.UninstallOptions):Promise<void>;
 
-export function VerifyPostgresPassword(arg1:string):Promise<void>;
+export function VerifyPostgresPassword(arg1:string,arg2:string):Promise<void>;

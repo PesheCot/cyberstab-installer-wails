@@ -46,10 +46,11 @@ func main() {
 	app := NewApp()
 
 	err := wails.Run(&options.App{
-		Title:     "Киберстаб — удаление",
-		Width:     860,
-		Height:    620,
-		Frameless: true,
+		Title:         "Киберстаб — удаление",
+		Width:         860,
+		Height:        620,
+		DisableResize: true,
+		Frameless:     true,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},

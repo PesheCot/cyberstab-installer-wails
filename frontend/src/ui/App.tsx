@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import cyberstabLogo from "../assets/cyberstab-logo.svg";
 
 type StepInfo = {
   Index: number;
@@ -15,6 +16,15 @@ type AppInfo = {
   postgresInstalled: boolean;
 };
 
+type DbEngineKind = "postgresql" | "jatoba";
+
+type DbEngineInfo = {
+  kind: DbEngineKind;
+  label: string;
+  binDir: string;
+  isManual?: boolean;
+};
+
 declare global {
   interface Window {
     go: any;
@@ -26,6 +36,79 @@ function cls(...parts: Array<string | false | undefined>) {
   return parts.filter(Boolean).join(" ");
 }
 
+const STAGE_SECTIONS = [
+  "Что установить",
+  "СУБД",
+  "Папка установки",
+  "Дистрибутив",
+  "База данных (БД)",
+  "Запуск",
+] as const;
+
+const TOTAL_VISIBLE_STEPS = 5;
+
+function osLabel(os?: string) {
+  if (os === "windows") return "Windows";
+  if (os === "linux") return "Linux";
+  return os || "—";
+}
+
+function dbEngineLabel(kind?: string) {
+  if (kind === "jatoba") return "Jatoba";
+  return "PostgreSQL";
+}
+
+function buildInstallStepsPreview(
+  reinstallExisting: boolean,
+  dbAction: "skip" | "new" | "restore",
+  hasDbComponent: boolean,
+): StepInfo[] {
+  const steps: StepInfo[] = [
+    { Index: 1, Description: "Проверка параметров", Status: "", IsActive: false, IsDone: false },
+    { Index: 2, Description: "Подготовка папки установки", Status: "", IsActive: false, IsDone: false },
+  ];
+  let idx = 3;
+  if (reinstallExisting) {
+    steps.push({ Index: idx++, Description: "Копирование файлов", Status: "", IsActive: false, IsDone: false });
+  }
+  if (hasDbComponent && dbAction !== "skip") {
+    steps.push({ Index: idx++, Description: "Инициализация базы данных", Status: "", IsActive: false, IsDone: false });
+  }
+  steps.push({ Index: idx, Description: "Завершение", Status: "", IsActive: false, IsDone: false });
+  return steps;
+}
+
+const OptionChip: React.FC<{
+  label: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  disabled?: boolean;
+}> = ({ label, checked, onChange, disabled }) => (
+  <button
+    type="button"
+    className={cls("optionChip", checked && "optionChipOn", disabled && "disabled")}
+    onClick={() => !disabled && onChange(!checked)}
+    disabled={disabled}
+  >
+    <span className="optionChipMark" aria-hidden>{checked ? "✓" : ""}</span>
+    <span>{label}</span>
+  </button>
+);
+
+const RadioRow: React.FC<{
+  name: string;
+  label: string;
+  checked: boolean;
+  onChange: () => void;
+  disabled?: boolean;
+}> = ({ name, label, checked, onChange, disabled }) => (
+  <label className={cls("radioRow", checked && "radioRowOn", disabled && "disabled")}>
+    <input type="radio" name={name} checked={checked} onChange={onChange} disabled={disabled} />
+    <span className="radioRowDot" />
+    <span>{label}</span>
+  </label>
+);
+
 export const App: React.FC = () => {
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [stage, setStage] = useState<0 | 1 | 2 | 3 | 4 | 5>(0);
@@ -34,7 +117,9 @@ export const App: React.FC = () => {
   const [installDB, setInstallDB] = useState(false);
   const [sourceRoot, setSourceRoot] = useState("");
   const [installDir, setInstallDir] = useState("");
+  const [pgUser, setPgUser] = useState("postgres");
   const [pgPass, setPgPass] = useState("");
+  const [showPgPass, setShowPgPass] = useState(false);
   const [running, setRunning] = useState(false);
   const [steps, setSteps] = useState<StepInfo[]>([]);
   const [errorText, setErrorText] = useState<string>("");
@@ -55,8 +140,10 @@ export const App: React.FC = () => {
   const [usbError, setUsbError] = useState<string>("");
   const [usbChecking, setUsbChecking] = useState<boolean>(false);
 
-  // PostgreSQL installation state (stage 1)
-  const [pgInstalled, setPgInstalled] = useState<boolean>(true);
+  // DB engine state (stage 1)
+  const [dbEngines, setDbEngines] = useState<DbEngineInfo[]>([]);
+  const [dbEngineKind, setDbEngineKind] = useState<DbEngineKind | "">("");
+  const [dbInstalled, setDbInstalled] = useState<boolean>(true);
   const [pgInstallerFound, setPgInstallerFound] = useState<boolean>(false);
   const [pgInstallerPath, setPgInstallerPath] = useState<string>("");
   const [pgInstalling, setPgInstalling] = useState<boolean>(false);
@@ -81,8 +168,11 @@ export const App: React.FC = () => {
   // DB init progress bar (engine step 4).
   const [initPct, setInitPct] = useState<number>(0);
   const [initStatus, setInitStatus] = useState<string>("");
+  const [desktopPreviewDone, setDesktopPreviewDone] = useState(false);
 
   const needsPG = installServer || installDB;
+  const urlPreviewDone = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("preview") === "install-done";
+  const previewDone = urlPreviewDone || desktopPreviewDone;
 
   // When any background operation is running, lock the UI (except Cancel).
   const uiLocked =
@@ -95,12 +185,22 @@ export const App: React.FC = () => {
 
   const readyToStart = useMemo(() => {
     if (!installServer && !installClients && !installDB) return false;
-    if (needsPG && pgPass.trim().length === 0) return false;
+    if (needsPG && (pgUser.trim().length === 0 || pgPass.trim().length === 0)) return false;
     return true;
-  }, [installServer, installClients, installDB, needsPG, pgPass]);
+  }, [installServer, installClients, installDB, needsPG, pgUser, pgPass]);
 
   useEffect(() => {
     (async () => {
+      if (urlPreviewDone) return;
+      try {
+        if (await window.go.main.App.PreviewInstallDone()) {
+          setDesktopPreviewDone(true);
+          return;
+        }
+      } catch {
+        // ignore
+      }
+
       const i: AppInfo = await window.go.main.App.GetAppInfo();
       setInfo(i);
       if (i.os === "windows") setInstallDir("C:\\Program Files\\Cyberstab");
@@ -136,15 +236,33 @@ export const App: React.FC = () => {
     });
   }, []);
 
-  // Check PostgreSQL installation when entering stage 1.
+  // Check DB engine availability when entering stage 1.
   useEffect(() => {
     if (stage !== 1) return;
     (async () => {
       try {
-        const result = await window.go.main.App.CheckPgInstalled();
-        setPgInstalled(result.installed);
+        const result = await window.go.main.App.CheckDbInstalled();
+        const engines = (result.engines || []) as DbEngineInfo[];
+        setDbEngines(engines);
+        setDbInstalled(result.installed);
         setPgInstallerFound(result.installerFound);
         setPgInstallerPath(result.installerPath);
+        if (engines.length === 1) {
+          const kind = engines[0].kind;
+          setDbEngineKind(kind);
+          await window.go.main.App.SelectDbEngine(kind);
+        } else if (engines.length >= 2) {
+          const preferred =
+            (engines.find((e) => e.kind === "postgresql")?.kind ||
+              engines[0]?.kind ||
+              "") as DbEngineKind | "";
+          setDbEngineKind(preferred);
+          if (preferred) {
+            await window.go.main.App.SelectDbEngine(preferred);
+          }
+        } else {
+          setDbEngineKind("");
+        }
         const i: AppInfo = await window.go.main.App.GetAppInfo();
         setInfo(i);
       } catch {
@@ -155,6 +273,8 @@ export const App: React.FC = () => {
 
   // Re-try auto-detect when component selection changes (if user hasn't typed a path).
   useEffect(() => {
+    if (previewDone) return;
+
     (async () => {
       if (sourceRoot.trim().length > 0) return;
       try {
@@ -186,7 +306,10 @@ export const App: React.FC = () => {
     setDbChecking(true);
     (async () => {
       try {
-        const result = await window.go.main.App.CheckOkidociDB(pgPass);
+        if (dbEngineKind) {
+          await window.go.main.App.SelectDbEngine(dbEngineKind);
+        }
+        const result = await window.go.main.App.CheckOkidociDB(pgUser, pgPass);
         setDbExists(result.exists);
         // По умолчанию — пересоздание с дампом; «оставить БД» нужно выбрать явно.
         setDbAction("new");
@@ -197,7 +320,7 @@ export const App: React.FC = () => {
         setDbChecking(false);
       }
     })();
-  }, [stage]);
+  }, [stage, dbEngineKind]);
 
   const onPickFolder = async () => {
     const p = await window.go.main.App.PickFolder();
@@ -214,12 +337,24 @@ export const App: React.FC = () => {
     setPgInstallError("");
     try {
       await window.go.main.App.InstallPostgresFromUsb();
-      const result = await window.go.main.App.CheckPgInstalled();
-      setPgInstalled(result.installed);
+      const result = await window.go.main.App.CheckDbInstalled();
+      const engines = (result.engines || []) as DbEngineInfo[];
+      setDbEngines(engines);
+      setDbInstalled(result.installed);
       setPgInstallerFound(result.installerFound);
       setPgInstallerPath(result.installerPath);
+      if (engines.length > 0) {
+        const preferred =
+          (engines.find((e) => e.kind === "postgresql")?.kind ||
+            engines[0]?.kind ||
+            "") as DbEngineKind | "";
+        setDbEngineKind(preferred);
+        if (preferred) {
+          await window.go.main.App.SelectDbEngine(preferred);
+        }
+      }
       if (!result.installed) {
-        setPgInstallError("PostgreSQL не обнаружен после установки. Попробуйте снова или укажите путь вручную.");
+        setPgInstallError("СУБД не обнаружена после установки. Попробуйте снова или укажите путь вручную.");
       } else {
         setPgInstallError("");
         const i: AppInfo = await window.go.main.App.GetAppInfo();
@@ -232,12 +367,20 @@ export const App: React.FC = () => {
     }
   };
 
-  const onPickPgDir = async () => {
+  const onPickDbDir = async () => {
     setPgInstallError("");
     try {
-      const dir = await window.go.main.App.PickPgDir();
+      const dir = await window.go.main.App.PickDbDir();
       if (dir) {
-        setPgInstalled(true);
+        const result = await window.go.main.App.CheckDbInstalled();
+        const engines = (result.engines || []) as DbEngineInfo[];
+        setDbEngines(engines);
+        setDbInstalled(result.installed);
+        const selected = engines.find((e) => e.binDir.toLowerCase().includes(dir.toLowerCase()))?.kind || dbEngineKind || engines[0]?.kind || "";
+        if (selected) {
+          setDbEngineKind(selected as DbEngineKind);
+          await window.go.main.App.SelectDbEngine(selected);
+        }
         setPgInstallError("");
         const i: AppInfo = await window.go.main.App.GetAppInfo();
         setInfo(i);
@@ -256,6 +399,30 @@ export const App: React.FC = () => {
     }
   };
 
+  const beginInstall = (reinstallExisting: boolean, pending: {
+    installServer: boolean;
+    installClients: boolean;
+    installDB: boolean;
+    sourceRoot: string;
+    installDir: string;
+    dbEngine: string;
+    postgresUser: string;
+    postgresPassword: string;
+    dbAction: string;
+    restoreSqlPath: string;
+  }) => {
+    const hasDbComponent = pending.installServer || pending.installDB;
+    const action = (pending.dbAction || "new") as "skip" | "new" | "restore";
+    setDeployPct(0);
+    setDeployStatus("");
+    setInitPct(0);
+    setInitStatus("");
+    setInstallDone(false);
+    setSteps(buildInstallStepsPreview(reinstallExisting, action, hasDbComponent));
+    setRunning(true);
+    setErrorText("");
+  };
+
   const onStart = async () => {
     setErrorText("");
     const pending = {
@@ -264,6 +431,8 @@ export const App: React.FC = () => {
       installDB,
       sourceRoot,
       installDir,
+      dbEngine: dbEngineKind,
+      postgresUser: pgUser,
       postgresPassword: pgPass,
       dbAction: needsPG ? dbAction : "",
       restoreSqlPath: dbAction === "restore" ? restoreSqlPath : "",
@@ -278,7 +447,7 @@ export const App: React.FC = () => {
         return;
       }
 
-      setRunning(true);
+      beginInstall(true, pending);
       await window.go.main.App.StartInstall({ ...pending, reinstallExisting: true });
     } catch (e: any) {
       setRunning(false);
@@ -292,8 +461,7 @@ export const App: React.FC = () => {
     setShowInstallDirModal(false);
     setPendingStartOpts(null);
 
-    setRunning(true);
-    setErrorText("");
+    beginInstall(reinstallExisting, pending);
     try {
       await window.go.main.App.StartInstall({ ...pending, reinstallExisting });
     } catch (e: any) {
@@ -309,9 +477,10 @@ export const App: React.FC = () => {
     }
     if (stage === 1) {
       if (!needsPG) return true;
-      if (!pgInstalled) return false;
+      if (!dbInstalled) return false;
       if (pgInstalling) return false;
-      return pgPass.trim().length > 0;
+      if (dbEngines.length > 1 && !dbEngineKind) return false;
+      return pgUser.trim().length > 0 && pgPass.trim().length > 0;
     }
     if (stage === 2) {
       if (info?.os !== "windows") return true;
@@ -325,7 +494,7 @@ export const App: React.FC = () => {
       return true;
     }
     return true;
-  }, [stage, installServer, installClients, installDB, needsPG, pgPass, info?.os, installDir, sourceRoot, dbAction, restoreSqlPath, dbChecking, usbChecking, pgInstalled, pgInstalling]);
+  }, [stage, installServer, installClients, installDB, needsPG, pgUser, pgPass, info?.os, installDir, sourceRoot, dbAction, restoreSqlPath, dbChecking, usbChecking, dbInstalled, pgInstalling, dbEngines.length, dbEngineKind]);
 
   const onCancel = async () => {
     if (closing) return;
@@ -343,6 +512,14 @@ export const App: React.FC = () => {
       // Give the OS a moment to spawn the process before quitting.
       window.setTimeout(() => window.runtime.Quit(), 400);
       return;
+    }
+
+    if (running) {
+      try {
+        await window.go.main.App.CancelInstall();
+      } catch {
+        // The app is closing; best-effort cancellation is enough here.
+      }
     }
 
     window.runtime.Quit();
@@ -384,11 +561,14 @@ export const App: React.FC = () => {
       return;
     }
 
-    // Stage 1: verify password when PG is installed.
-    if (stage === 1 && needsPG && pgInstalled) {
+    // Stage 1: verify credentials against selected DB engine.
+    if (stage === 1 && needsPG && dbInstalled) {
       setPgVerifying(true);
       try {
-        await window.go.main.App.VerifyPostgresPassword(pgPass);
+        if (dbEngineKind) {
+          await window.go.main.App.SelectDbEngine(dbEngineKind);
+        }
+        await window.go.main.App.VerifyPostgresPassword(pgUser, pgPass);
         setPgVerified(true);
         setPgVerifyError("");
         setPgVerifying(false);
@@ -396,14 +576,8 @@ export const App: React.FC = () => {
       } catch (_e: any) {
         setPgVerified(false);
         setPgVerifying(false);
-        const msg = String(_e?.message || _e || "").toLowerCase();
-        if (msg.includes("timeout") || msg.includes("время ожидания")) {
-          setPgVerifyError(String(_e?.message || _e));
-        } else if (msg.includes("not found") || msg.includes("не найден") || msg.includes("не удается") || msg.includes("не удаётся")) {
-          setPgVerifyError("PostgreSQL не найден. Убедитесь, что PostgreSQL установлен.");
-        } else {
-          setPgVerifyError("Пароль неверный. Проверьте пароль и попробуйте снова, или нажмите «Забыли пароль?»");
-        }
+        const raw = String(_e?.message || _e || "").trim();
+        setPgVerifyError(raw || "Не удалось проверить учётные данные СУБД.");
         return;
       }
     } else {
@@ -421,13 +595,26 @@ export const App: React.FC = () => {
       setResetError("Пароли не совпадают.");
       return;
     }
+    const user = pgUser.trim();
+    if (!user) {
+      setResetError("Укажите пользователя PostgreSQL на шаге выше.");
+      return;
+    }
     setResetBusy(true);
     try {
-      await window.go.main.App.ResetPostgresPassword(newPgPass);
-      // SUCCESS – replace password in the main form and close modal
+      if (dbEngineKind) {
+        await window.go.main.App.SelectDbEngine(dbEngineKind);
+      }
+      await window.go.main.App.ResetPostgresPassword(user, newPgPass);
       setPgPass(newPgPass);
-      setPgVerified(true);
-      setPgVerifyError("");
+      try {
+        await window.go.main.App.VerifyPostgresPassword(user, newPgPass);
+        setPgVerified(true);
+        setPgVerifyError("");
+      } catch (e: any) {
+        setPgVerified(false);
+        setPgVerifyError(String(e?.message || e));
+      }
       setShowResetModal(false);
       setNewPgPass("");
       setNewPgPass2("");
@@ -440,14 +627,28 @@ export const App: React.FC = () => {
 
   // Determine if we're in installation progress (running but not done)
   const isInstalling = running && !installDone;
+  const showInstallDone = installDone || previewDone;
+  const progressLayout = running || showInstallDone;
+  const compactStageLayout = !running && !showInstallDone && stage === 0;
+  const isFinalInstallStep = stage === 4;
+  const nextDisabled = uiLocked || !canNext || (isFinalInstallStep && !readyToStart);
+  const previewSteps = buildInstallStepsPreview(true, "new", true).map((s) => ({ ...s, IsDone: true }));
+  const visibleSteps = previewDone && steps.length === 0 ? previewSteps : steps;
+  const hasStepErrors = visibleSteps.some((s) => s.Error);
+  const showCopyProgress = visibleSteps.some((s) => s.Description === "Копирование файлов");
+  const showDbProgress = visibleSteps.some((s) => s.Description === "Инициализация базы данных");
 
   return (
     <div className="app">
       {showResetModal && (
         <div className="modalOverlay">
           <div className="modal">
-            <div className="cardTitle">Смена пароля PostgreSQL</div>
-            <div className="hint">Введите новый пароль для пользователя <b>postgres</b>.</div>
+            <div className="cardTitle">Мастер установки</div>
+            <div className="hint">
+              Новый пароль для пользователя <b>{pgUser.trim() || "—"}</b>.
+              <br />
+              Сброс выполняется через локальный доступ СУБД (нужны права администратора Windows).
+            </div>
             <div className="row" style={{ marginTop: 12 }}>
               <input className="input" type="password" value={newPgPass} onChange={(e) => setNewPgPass(e.target.value)} placeholder="Новый пароль" disabled={resetBusy} />
             </div>
@@ -477,11 +678,13 @@ export const App: React.FC = () => {
               Папка <b>{installDir}</b> уже существует. Выберите режим установки:
             </div>
             <div className="hint" style={{ marginTop: 10 }}>
-              При <b>переустановке</b> файл <b>server.properties</b> будет сохранён как <b>server.properties.back</b> и затем подставлен обратно.
+              <b>Оставить</b> — не копировать файлы с флешки, использовать уже установленные в этой папке.
+              <br />
+              <b>Переустановить</b> — удалить старые папки Cyberstab* и скопировать заново с носителя.
             </div>
-            <div className="wizardFooter" style={{ marginTop: 10 }}>
+            <div className="wizardFooter">
               <button
-                className={cls("btn", running && "disabled")}
+                className={cls("btnCancel", running && "disabled")}
                 onClick={() => {
                   setShowInstallDirModal(false);
                   setPendingStartOpts(null);
@@ -500,433 +703,492 @@ export const App: React.FC = () => {
           </div>
         </div>
       )}
-
       <div className="topBar">
         <div className="topBarInner" style={{ ["--wails-draggable" as any]: "drag" }}>
           <div className="topLeft">
-            <div className="topLogo">C</div>
-            <div className="topTitle">Cyberstab Installer</div>
+            <img className="topLogo" src={cyberstabLogo} alt="" aria-hidden />
+            <div className="topTitle">Установщик Киберстаб</div>
           </div>
           <div className="topWinButtons" style={{ ["--wails-draggable" as any]: "no-drag" }}>
-            <button className="winBtn" onClick={() => window.runtime.WindowMinimise()} aria-label="Minimise">—</button>
-            <button className="winBtn" onClick={() => window.runtime.WindowToggleMaximise()} aria-label="Maximise">□</button>
-            {/* Hide close button on completion screen */}
-            {!installDone && (
-              <button className="winBtn winClose" onClick={() => onCancel()} aria-label="Close">×</button>
+            <button type="button" className="winBtn" onClick={() => window.runtime.WindowMinimise()} aria-label="Свернуть">—</button>
+            {!showInstallDone && (
+              <button type="button" className="winBtn winClose" onClick={() => onCancel()} aria-label="Закрыть">×</button>
             )}
           </div>
         </div>
       </div>
-      <div className="content">
-      <div className={cls("grid", (running || installDone) && "dual")}>
-        <div className="card">
-          <div className="cardTitle">Мастер установки</div>
-          <div className="hint">
-            Шаг {stage + 1} из 6 · ОС: {info?.os === "windows" ? "Windows" : info?.os === "linux" ? "Linux" : (info?.os || "—")}
-          </div>
 
-          {stage === 0 && (
-            <>
-              <div className="cardTitle" style={{ marginTop: 14 }}>Что установить</div>
-              <div className="row" style={{ flexWrap: "wrap" }}>
-                <label className="check">
-                  <input
-                    type="checkbox"
-                    checked={installServer}
-                    onChange={(e) => {
-                      setInstallServer(e.target.checked);
-                      if (e.target.checked) setInstallDB(false);
-                    }}
-                    disabled={uiLocked || installDB}
-                  />
-                  <span>Сервер</span>
-                </label>
-                <label className="check">
-                  <input type="checkbox" checked={installClients} onChange={(e) => setInstallClients(e.target.checked)} disabled={uiLocked} />
-                  <span>Клиент</span>
-                </label>
-                <label className="check">
-                  <input
-                    type="checkbox"
-                    checked={installDB}
-                    onChange={(e) => {
-                      setInstallDB(e.target.checked);
-                      if (e.target.checked) setInstallServer(false);
-                    }}
-                    disabled={uiLocked || installServer}
-                  />
-                  <span>Только БД</span>
-                </label>
+      <div className={cls("content", compactStageLayout && "contentCompact")}>
+        <div className={cls("wizardPanel", compactStageLayout && "wizardPanelCompact", progressLayout && "wizardPanelProgress")}>
+          {!progressLayout && (
+            <div className="wizardHead">
+              <div>
+                <h1 className="wizardTitle">Мастер установки</h1>
+                <p className="wizardStep">Шаг {Math.min(stage + 1, TOTAL_VISIBLE_STEPS)} из {TOTAL_VISIBLE_STEPS}</p>
               </div>
-              <div className="hint" style={{ marginTop: 8 }}>
-                {installDB
-                  ? "Будут скопированы только serverconsole и dbupdater для инициализации/восстановления базы данных."
-                  : info?.os === "windows"
-                    ? "Клиент будет выбран автоматически по разрядности системы (Windows64 на 64-bit)."
-                    : "Клиент будет выбран автоматически (Linux64 на 64-bit)."}
-              </div>
-              {usbChecking && (
-                <div className="hint" style={{ marginTop: 10 }}>Поиск USB-накопителя с дистрибутивом…</div>
-              )}
-              {usbError && (
-                <div className="hint" style={{ marginTop: 10, color: "var(--error)" }}>
-                  {usbError}
-                </div>
-              )}
-            </>
-          )}
-
-          {stage === 1 && (
-            <>
-              <div className="cardTitle" style={{ marginTop: 14 }}>PostgreSQL</div>
-              {!needsPG ? (
-                <div className="hint">Сервер/БД не выбран — PostgreSQL будет пропущен.</div>
-              ) : !pgInstalled ? (
-                <>
-                  <div className="hint" style={{ color: "var(--error)" }}>
-                    PostgreSQL не найден по стандартному пути (C:\Program Files\PostgreSQL\...\bin).
-                  </div>
-                  <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 10 }}>
-                    {pgInstallerFound && (
-                      <button
-                        className={cls("btnPrimary", pgInstalling && "disabled")}
-                        onClick={onInstallPgFromUsb}
-                        disabled={pgInstalling}
-                      >
-                        {pgInstalling ? "Установка PostgreSQL…" : `Установить PostgreSQL с флешки`}
-                      </button>
-                    )}
-                    {!pgInstallerFound && (
-                      <div className="hint">Установщик PostgreSQL (postgresql*.exe) не найден на USB-накопителе.</div>
-                    )}
-                    <button className="btn" onClick={onPickPgDir} disabled={pgInstalling}>
-                      Указать путь до PostgreSQL вручную…
-                    </button>
-                  </div>
-                  {pgInstallError && (
-                    <div className="hint" style={{ marginTop: 10, color: "var(--error)" }}>
-                      {pgInstallError}
-                    </div>
-                  )}
-                </>
-              ) : (
-                <>
-                  <div className="hint">
-                    Пароль postgres нужен для настройки и инициализации БД.
-                  </div>
-                  <div className="row" style={{ gap: "8px" }}>
-                    <input
-                      className="input"
-                      type="password"
-                      value={pgPass}
-                      onChange={(e) => {
-                        setPgPass(e.target.value);
-                        setPgVerified(false);
-                        setPgVerifyError("");
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          onNext();
-                        }
-                      }}
-                      placeholder="Пароль postgres"
-                      disabled={uiLocked}
-                      style={pgVerified ? { borderColor: "var(--success)" } : pgVerifyError ? { borderColor: "var(--error)" } : {}}
-                    />
-                  </div>
-                  {pgVerified && (
-                    <div className="hint" style={{ marginTop: 6, color: "var(--success)" }}>
-                      ✓ Пароль подтверждён
-                    </div>
-                  )}
-                  {pgVerifyError && (
-                    <div className="hint" style={{ marginTop: 6, color: "var(--error)" }}>
-                      ✗ {pgVerifyError}
-                    </div>
-                  )}
-                  {info?.postgresInstalled && (
-                    <div className="row" style={{ marginTop: 10, justifyContent: "flex-start" }}>
-                      <button className="btn" onClick={() => {
-                        setShowResetModal(true);
-                        setResetError("");
-                        setNewPgPass("");
-                        setNewPgPass2("");
-                      }} disabled={uiLocked}>
-                        Забыли пароль?
-                      </button>
-                    </div>
-                  )}
-                </>
-              )}
-            </>
-          )}
-
-          {stage === 2 && (
-            <>
-              <div className="cardTitle" style={{ marginTop: 14 }}>Папка установки</div>
-              {info?.os === "windows" ? (
-                <>
-                  <div className="hint">На Windows можно выбрать папку установки.</div>
-                  <div className="row">
-                    <input className="input" value={installDir} onChange={(e) => setInstallDir(e.target.value)} placeholder="Например: C:\\Program Files" disabled={uiLocked} />
-                    <button className="btn" onClick={onPickInstallDir} disabled={uiLocked}>Выбрать…</button>
-                  </div>
-                </>
-              ) : (
-                <div className="hint">На Linux папка фиксированная: /opt/cyberstab</div>
-              )}
-            </>
-          )}
-
-          {stage === 3 && (
-            <>
-              <div className="cardTitle" style={{ marginTop: 14 }}>Дистрибутив</div>
-              <div className="hint">Выберите родительскую папку, где лежат папки `CyberstabServer*` / `CyberstabClient*`.</div>
-              <div className="row">
-                <input className="input" value={sourceRoot} onChange={(e) => setSourceRoot(e.target.value)} placeholder="Папка-дистрибутив (USB или локальная)" disabled={uiLocked} />
-                <button className="btn" onClick={onPickFolder} disabled={uiLocked}>Выбрать…</button>
-              </div>
-            </>
-          )}
-
-          {stage === 4 && (
-            <>
-              <div className="cardTitle" style={{ marginTop: 14 }}>База данных</div>
-              {!needsPG ? (
-                <div className="hint">Сервер/БД не выбран — настройка БД пропущена.</div>
-              ) : dbChecking ? (
-                <div className="hint">Проверка базы данных okidoci_db…</div>
-              ) : !dbExists ? (
-                <>
-                  <div className="hint">База данных <b>okidoci_db</b> не найдена. Выберите действие:</div>
-                  <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
-                    <label className="check">
-                      <input type="radio" name="dbAction" checked={dbAction === "new"} onChange={() => setDbAction("new")} />
-                      <span>Создать новую БД</span>
-                    </label>
-                    <label className="check">
-                      <input type="radio" name="dbAction" checked={dbAction === "restore"} onChange={() => setDbAction("restore")} />
-                      <span>Восстановить из бэкапа (.sql)</span>
-                    </label>
-                  </div>
-                  {dbAction === "restore" && (
-                    <div className="row" style={{ marginTop: 10 }}>
-                      <input
-                        className="input"
-                        value={restoreSqlPath}
-                        onChange={(e) => setRestoreSqlPath(e.target.value)}
-                        placeholder="Путь к .sql файлу"
-                        disabled={uiLocked}
-                      />
-                      <button className="btn" onClick={onPickSqlFile} disabled={uiLocked}>Выбрать…</button>
-                    </div>
-                  )}
-                </>
-              ) : (
-                <>
-                  <div className="hint">База данных <b>okidoci_db</b> уже существует. Выберите действие:</div>
-                  <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
-                    <label className="check">
-                      <input type="radio" name="dbAction" checked={dbAction === "skip"} onChange={() => setDbAction("skip")} />
-                      <span>Оставить текущую БД (пропустить инициализацию)</span>
-                    </label>
-                    <label className="check">
-                      <input type="radio" name="dbAction" checked={dbAction === "new"} onChange={() => setDbAction("new")} />
-                      <span>Удалить + создать новую (бэкап будет сохранён)</span>
-                    </label>
-                    <label className="check">
-                      <input type="radio" name="dbAction" checked={dbAction === "restore"} onChange={() => setDbAction("restore")} />
-                      <span>Удалить + восстановить из бэкапа (бэкап будет сохранён)</span>
-                    </label>
-                  </div>
-                  {dbAction === "restore" && (
-                    <div className="row" style={{ marginTop: 10 }}>
-                      <input
-                        className="input"
-                        value={restoreSqlPath}
-                        onChange={(e) => setRestoreSqlPath(e.target.value)}
-                        placeholder="Путь к .sql файлу"
-                        disabled={uiLocked}
-                      />
-                      <button className="btn" onClick={onPickSqlFile} disabled={uiLocked}>Выбрать…</button>
-                    </div>
-                  )}
-                </>
-              )}
-            </>
-          )}
-
-          {stage === 5 && (
-            <>
-              <div className="cardTitle" style={{ marginTop: 14 }}>
-                Запуск
-              </div>
-              <div className="hint">Проверьте параметры и нажмите "Начать установку".</div>
-              <div className="row" style={{ marginTop: 16 }}>
-                <button className={cls("btnPrimary", (!readyToStart || uiLocked) && "disabled")} onClick={onStart} disabled={!readyToStart || uiLocked}>
-                  {running ? "Устанавливаю…" : uiLocked ? "Подождите…" : "Начать установку"}
-                </button>
-              </div>
-              <div className="hint" style={{ marginTop: 10 }}>
-                {info?.needAdmin ? "Запустите установщик от администратора." : " "}
-              </div>
-            </>
-          )}
-
-          {stage !== 1 && errorText && !running && (
-            <div className="hint" style={{ marginTop: 10, color: "var(--error)" }}>
-              {errorText}
+              <p className="wizardOs">ОС: {osLabel(info?.os)}</p>
             </div>
           )}
 
-        </div>
+          {!running && !showInstallDone && (
+            <>
+              <h2 className="wizardSectionTitle">{STAGE_SECTIONS[stage]}</h2>
+              <div className="wizardBody">
+                {stage === 0 && (
+                  <>
+                    <div className="optionChipRow">
+                      <OptionChip
+                        label="Сервер"
+                        checked={installServer}
+                        disabled={uiLocked}
+                        onChange={(v) => {
+                          setInstallServer(v);
+                          if (v) setInstallDB(false);
+                        }}
+                      />
+                      <OptionChip
+                        label="Клиент"
+                        checked={installClients}
+                        disabled={uiLocked}
+                        onChange={setInstallClients}
+                      />
+                      <OptionChip
+                        label="Базу данных"
+                        checked={installDB}
+                        disabled={uiLocked}
+                        onChange={(v) => {
+                          setInstallDB(v);
+                          if (v) setInstallServer(false);
+                        }}
+                      />
+                      {usbChecking && (
+                        <span className="usbStatusInline">Поиск USB-накопителя с дистрибутивом…</span>
+                      )}
+                    </div>
+                    <p className="wizardHint" style={{ marginTop: 14 }}>
+                      {installDB
+                        ? "Будут скопированы только serverconsole и dbupdater для инициализации/восстановления базы данных."
+                        : info?.os === "windows"
+                          ? "Клиент будет выбран автоматически по разрядности системы (Windows64 на 64-bit)."
+                          : "Клиент будет выбран автоматически (Linux64 на 64-bit)."}
+                    </p>
+                    {usbError && <p className="wizardHint wizardHintError">{usbError}</p>}
+                  </>
+                )}
 
-        {(running || installDone) && (
-          <div className="card">
-            <div className="cardTitle">Ход установки</div>
-            <div className="steps">
-              {steps.map((s) => (
-                <div key={s.Index} className={cls("step", s.IsActive && "active", s.IsDone && "done", !!s.Error && "error")}>
-                  <div className="stepIcon">
-                    {s.Error ? "✗" : s.IsDone ? "✓" : s.IsActive ? "…" : "•"}
-                  </div>
-                  <div className="stepBody">
-                    <div className="stepTitle">{s.Description}</div>
-                    {s.Status && <div className="stepStatus">{s.Status}</div>}
-                    {s.Error && (
-                      <div className="stepStatus" style={{ color: "var(--error)" }}>
-                        {s.Error}
+                {stage === 1 && (
+                  <>
+                    {!needsPG ? (
+                      <p className="wizardHint">Сервер/БД не выбран — шаг СУБД будет пропущен.</p>
+                    ) : !dbInstalled ? (
+                      <>
+                        <p className="wizardHint wizardHintError">
+                          Не найдены PostgreSQL или Jatoba в стандартных путях.
+                        </p>
+                        <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 10 }}>
+                          {pgInstallerFound && (
+                            <button
+                              type="button"
+                              className={cls("btnPrimary", pgInstalling && "disabled")}
+                              onClick={onInstallPgFromUsb}
+                              disabled={pgInstalling}
+                            >
+                              {pgInstalling ? "Установка PostgreSQL…" : "Установить PostgreSQL с флешки"}
+                            </button>
+                          )}
+                          {!pgInstallerFound && (
+                            <p className="wizardHint">Установщик PostgreSQL (postgresql*.exe) не найден на USB-накопителе.</p>
+                          )}
+                          <button type="button" className="btn" onClick={onPickDbDir} disabled={pgInstalling}>
+                            Указать путь до СУБД вручную…
+                          </button>
+                        </div>
+                        {pgInstallError && <p className="wizardHint wizardHintError">{pgInstallError}</p>}
+                      </>
+                    ) : (
+                      <>
+                        {dbEngines.length > 1 ? (
+                          <div className="radioList" style={{ marginTop: 4, marginBottom: 10 }}>
+                            <RadioRow
+                              name="dbEngine"
+                              label="PostgreSQL"
+                              checked={dbEngineKind === "postgresql"}
+                              onChange={async () => {
+                                setDbEngineKind("postgresql");
+                                setPgVerified(false);
+                                setPgVerifyError("");
+                                await window.go.main.App.SelectDbEngine("postgresql");
+                              }}
+                              disabled={uiLocked}
+                            />
+                            <RadioRow
+                              name="dbEngine"
+                              label="Jatoba"
+                              checked={dbEngineKind === "jatoba"}
+                              onChange={async () => {
+                                setDbEngineKind("jatoba");
+                                setPgVerified(false);
+                                setPgVerifyError("");
+                                await window.go.main.App.SelectDbEngine("jatoba");
+                              }}
+                              disabled={uiLocked}
+                            />
+                          </div>
+                        ) : (
+                          <p className="wizardHint">Найдена СУБД: <b>{dbEngineLabel(dbEngineKind || dbEngines[0]?.kind)}</b>.</p>
+                        )}
+                        <p className="wizardHint">
+                          Укажите пользователя СУБД с правами суперпользователя — он нужен для создания ролей и инициализации базы данных.
+                        </p>
+                        <div className="pgRow">
+                          <div className="pgPasswordGroup">
+                            <div className={cls("passwordField", pgVerified && "inputOk", pgVerifyError && "inputError")}>
+                              <input
+                                className="input passwordInput"
+                                type="text"
+                                value={pgUser}
+                                onChange={(e) => {
+                                  setPgUser(e.target.value);
+                                  setPgVerified(false);
+                                  setPgVerifyError("");
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") onNext();
+                                }}
+                                placeholder="Пользователь PostgreSQL"
+                                disabled={uiLocked}
+                                autoComplete="username"
+                              />
+                            </div>
+                            <div className={cls("passwordField", pgVerified && "inputOk", pgVerifyError && "inputError")}>
+                              <input
+                                className="input passwordInput"
+                                type={showPgPass ? "text" : "password"}
+                                value={pgPass}
+                                onChange={(e) => {
+                                  setPgPass(e.target.value);
+                                  setPgVerified(false);
+                                  setPgVerifyError("");
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") onNext();
+                                }}
+                                placeholder="Пароль"
+                                disabled={uiLocked}
+                                autoComplete="current-password"
+                              />
+                              <button
+                                type="button"
+                                className="passwordEye"
+                                onClick={() => setShowPgPass((v) => !v)}
+                                disabled={uiLocked}
+                                aria-label={showPgPass ? "Скрыть пароль" : "Показать пароль"}
+                              >
+                                <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+                                  <path d="M2.8 12s3.4-6 9.2-6 9.2 6 9.2 6-3.4 6-9.2 6-9.2-6-9.2-6Z" />
+                                  <circle cx="12" cy="12" r="2.6" />
+                                </svg>
+                              </button>
+                            </div>
+                            {pgVerifyError && <p className="pgInlineError" title={pgVerifyError}>{pgVerifyError}</p>}
+                          </div>
+                          {info?.postgresInstalled && (
+                            <button
+                              type="button"
+                              className={cls("btnLink", uiLocked && "disabled")}
+                              onClick={() => {
+                                setShowResetModal(true);
+                                setResetError("");
+                                setNewPgPass("");
+                                setNewPgPass2("");
+                              }}
+                              disabled={uiLocked || pgUser.trim().length === 0}
+                              title={pgUser.trim().length === 0 ? "Сначала укажите пользователя PostgreSQL" : undefined}
+                            >
+                              Забыли пароль?
+                            </button>
+                          )}
+                          {dbEngines.length === 1 && (
+                            <button
+                              type="button"
+                              className={cls("btnLink", uiLocked && "disabled")}
+                              onClick={onPickDbDir}
+                              disabled={uiLocked}
+                            >
+                              Добавить вторую СУБД по пути…
+                            </button>
+                          )}
+                        </div>
+                        {pgVerified && <p className="wizardHint wizardHintSuccess">Подключение и права подтверждены</p>}
+                      </>
+                    )}
+                  </>
+                )}
+
+                {stage === 2 && (
+                  <>
+                    {info?.os === "windows" ? (
+                      <>
+                        <p className="wizardHint">На Windows можно выбрать папку установки.</p>
+                        <div className="pathRow">
+                          <input
+                            className="input"
+                            value={installDir}
+                            onChange={(e) => setInstallDir(e.target.value)}
+                            placeholder="C:\Program Files\Cyberstab"
+                            disabled={uiLocked}
+                          />
+                          <button type="button" className="btnSecondary" onClick={onPickInstallDir} disabled={uiLocked}>
+                            Выбрать…
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <p className="wizardHint">На Linux папка фиксированная: /opt/cyberstab</p>
+                    )}
+                  </>
+                )}
+
+                {stage === 3 && (
+                  <>
+                    <p className="wizardHint">
+                      Выберите родительскую папку, где лежат папки CyberstabServer* / CyberstabClient*.
+                    </p>
+                    <div className="pathRow">
+                      <input
+                        className="input"
+                        value={sourceRoot}
+                        onChange={(e) => setSourceRoot(e.target.value)}
+                        placeholder="Папка-дистрибутив"
+                        disabled={uiLocked}
+                      />
+                      <button type="button" className="btnSecondary" onClick={onPickFolder} disabled={uiLocked}>
+                        Выбрать…
+                      </button>
+                    </div>
+                  </>
+                )}
+
+                {stage === 4 && (
+                  <>
+                    {!needsPG ? (
+                      <p className="wizardHint">Сервер/БД не выбран — настройка БД пропущена.</p>
+                    ) : dbChecking ? (
+                      <p className="wizardHint">Проверка базы данных okidoci_db…</p>
+                    ) : !dbExists ? (
+                      <>
+                        <p className="wizardHint">База данных okidoci_db не найдена. Выберите действие:</p>
+                        <div className="radioList">
+                          <RadioRow name="dbAction" label="Создать новую БД" checked={dbAction === "new"} onChange={() => setDbAction("new")} disabled={uiLocked} />
+                          <RadioRow name="dbAction" label="Восстановить из .sql файла" checked={dbAction === "restore"} onChange={() => setDbAction("restore")} disabled={uiLocked} />
+                        </div>
+                        {dbAction === "restore" && (
+                          <div className="restoreSqlRow">
+                            <input
+                              className="input restoreSqlInput"
+                              value={restoreSqlPath}
+                              onChange={(e) => setRestoreSqlPath(e.target.value)}
+                              placeholder="Путь к .sql файлу"
+                              disabled={uiLocked}
+                            />
+                            <button type="button" className="btnPrimary restoreSqlButton" onClick={onPickSqlFile} disabled={uiLocked}>
+                              Выбрать…
+                            </button>
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        <p className="wizardHint">База данных okidoci_db уже существует. Выберите действие:</p>
+                        <div className="radioList">
+                          <RadioRow
+                            name="dbAction"
+                            label="Оставить текущую БД (пропустить инициализацию)"
+                            checked={dbAction === "skip"}
+                            onChange={() => setDbAction("skip")}
+                            disabled={uiLocked}
+                          />
+                          <RadioRow
+                            name="dbAction"
+                            label="Удалить + создать новую (резервная копия будет сохранена)"
+                            checked={dbAction === "new"}
+                            onChange={() => setDbAction("new")}
+                            disabled={uiLocked}
+                          />
+                          <RadioRow
+                            name="dbAction"
+                            label="Удалить + восстановить из .sql файла (резервная копия будет сохранена)"
+                            checked={dbAction === "restore"}
+                            onChange={() => setDbAction("restore")}
+                            disabled={uiLocked}
+                          />
+                        </div>
+                        {dbAction === "restore" && (
+                          <div className="restoreSqlRow">
+                            <input
+                              className="input restoreSqlInput"
+                              value={restoreSqlPath}
+                              onChange={(e) => setRestoreSqlPath(e.target.value)}
+                              placeholder="Путь к .sql файлу"
+                              disabled={uiLocked}
+                            />
+                            <button type="button" className="btnPrimary restoreSqlButton" onClick={onPickSqlFile} disabled={uiLocked}>
+                              Выбрать…
+                            </button>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </>
+                )}
+
+                {stage === 5 && (
+                  <>
+                    <p className="wizardHint">Проверьте параметры и нажмите «Начать установку».</p>
+                    <div className="wizardHeadActions">
+                      <button
+                        type="button"
+                        className={cls("btnPrimary", (!readyToStart || uiLocked) && "disabled")}
+                        onClick={onStart}
+                        disabled={!readyToStart || uiLocked}
+                      >
+                        {running ? "Устанавливаю…" : "Начать установку"}
+                      </button>
+                    </div>
+                    {info?.needAdmin && (
+                      <p className="wizardHint wizardHintError">Запустите установщик от администратора.</p>
+                    )}
+                  </>
+                )}
+
+                {stage !== 1 && errorText && !running && (
+                  <p className="wizardHint wizardHintError" style={{ marginTop: 12 }}>{errorText}</p>
+                )}
+              </div>
+            </>
+          )}
+
+          {(running || showInstallDone) && (
+            <>
+              <h2 className="wizardSectionTitle">Ход установки</h2>
+              <div className="wizardBody">
+                <div className={cls("progressContent", showInstallDone && "progressContentDone")}>
+                  <div className="progressLeft">
+                    <div className="steps">
+                      {visibleSteps.map((s) => (
+                        <div key={`${s.Index}-${s.Description}`} className={cls("step", s.IsActive && "active", s.IsDone && "done", !!s.Error && "error")}>
+                          <div className="stepIcon">{s.Error ? "✗" : s.IsDone ? "✓" : ""}</div>
+                          <div className="stepBody">
+                            <div className="stepTitle">{s.Description}</div>
+                            {s.Status && <div className="stepStatus">{s.Status}</div>}
+                            {s.Error && <div className="stepStatus" style={{ color: "var(--error)" }}>{s.Error}</div>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {showInstallDone && installClients && (
+                      <label className="check doneOpenCheck">
+                        <input type="checkbox" checked={openCyberstab} onChange={(e) => setOpenCyberstab(e.target.checked)} />
+                        <span>Открыть Киберстаб</span>
+                      </label>
+                    )}
+
+                    {showCopyProgress && deployStatus && deployPct < 100 && (
+                      <div className="initProgressSection">
+                        <div className="initProgressLabel">
+                          <span>Копирование файлов</span>
+                          <span>{Math.round(deployPct)}%</span>
+                        </div>
+                        <div className="initProgressBar">
+                          <div className={cls("initProgressBarFill", deployPct >= 99 && "done")} style={{ width: `${deployPct}%` }} />
+                        </div>
+                        <div className="initProgressStatus">{deployStatus}</div>
+                      </div>
+                    )}
+
+                    {showDbProgress && initStatus && initPct < 100 && (
+                      <div className="initProgressSection">
+                        <div className="initProgressLabel">
+                          <span>Инициализация базы данных</span>
+                          <span>{Math.round(initPct)}%</span>
+                        </div>
+                        <div className="initProgressBar">
+                          <div className={cls("initProgressBarFill", initPct >= 99 && "done")} style={{ width: `${initPct}%` }} />
+                        </div>
+                        <div className="initProgressStatus">{initStatus}</div>
                       </div>
                     )}
                   </div>
-                </div>
-              ))}
-            </div>
 
-            {deployStatus && deployPct < 100 && (
-              <div className="initProgressSection">
-                <div className="initProgressLabel">
-                  <span>Копирование файлов</span>
-                  <span>{Math.round(deployPct)}%</span>
-                </div>
-                <div className="initProgressBar">
-                  <div
-                    className={cls("initProgressBarFill", deployPct >= 99 && "done")}
-                    style={{ width: `${deployPct}%` }}
-                  />
-                </div>
-                <div className="initProgressStatus">{deployStatus}</div>
-              </div>
-            )}
-
-            {initStatus && initPct < 100 && (
-              <div className="initProgressSection">
-                <div className="initProgressLabel">
-                  <span>Инициализация базы данных</span>
-                  <span>{Math.round(initPct)}%</span>
-                </div>
-                <div className="initProgressBar">
-                  <div
-                    className={cls("initProgressBarFill", initPct >= 99 && "done")}
-                    style={{ width: `${initPct}%` }}
-                  />
-                </div>
-                <div className="initProgressStatus">{initStatus}</div>
-                {initPct > 0 && initPct < 100 && (
-                  <div className="initProgressHint">
-                    Шкала ориентирована примерно на 2 часа; при более быстром завершении дойдёт до ~99% и перескочит на 100%.
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Completion screen */}
-            {installDone && (
-              <div className="initProgressSection" style={{ marginTop: 20 }}>
-                <div style={{ textAlign: "center", marginBottom: 20 }}>
-                  <div style={{ 
-                    fontSize: 48, 
-                    marginBottom: 12,
-                    color: steps.some((s) => s.Error) ? "var(--error)" : "var(--success)"
-                  }}>
-                    {steps.some((s) => s.Error) ? "!" : "✓"}
-                  </div>
-                  <div className="cardTitle" style={{ fontSize: 20, marginBottom: 8 }}>
-                    {steps.some((s) => s.Error) ? "Установка завершена с ошибками" : "Установка завершена"}
-                  </div>
-                  {steps.some((s) => s.Error) ? (
-                    <div className="hint" style={{ color: "var(--error)" }}>
-                      Проверьте детали в панели «Ход установки».
+                  {showInstallDone && (
+                  <div className="doneHero">
+                    <div className="doneHeroIcon" style={{ color: hasStepErrors ? "var(--error)" : "var(--success)" }}>
+                      {hasStepErrors ? "!" : "✓"}
                     </div>
-                  ) : (
-                    <div className="hint" style={{ color: "var(--success)" }}>
-                      Cyberstab успешно установлен!
+                    <div className="doneHeroTitle">
+                      {hasStepErrors ? "Установка завершена с ошибками" : "Установка завершена"}
                     </div>
+                    {hasStepErrors && (
+                      <p className="wizardHint wizardHintError">Проверьте детали в списке шагов выше.</p>
+                    )}
+                  </div>
                   )}
                 </div>
-
-                {installClients && (
-                  <label className="check" style={{ marginBottom: 16, justifyContent: "center" }}>
-                    <input 
-                      type="checkbox" 
-                      checked={openCyberstab} 
-                      onChange={(e) => setOpenCyberstab(e.target.checked)} 
-                    />
-                    <span style={{ fontWeight: 600 }}>Открыть Киберстаб</span>
-                  </label>
-                )}
               </div>
-            )}
-          </div>
-        )}
-      </div>
+            </>
+          )}
+        </div>
       </div>
 
-      {/* Footer buttons - show/hide based on state */}
-      {!installDone && !isInstalling && (
+      {!showInstallDone && !isInstalling && (
         <div className="footerBar">
           <div className="footerInner">
-            <button
-              className={cls("btn", (uiLocked || stage === 0) && "disabled")}
-              onClick={() => {
-                if (uiLocked || stage === 0) return;
-                setStage((s) => (s > 0 ? ((s - 1) as any) : s));
-              }}
-              disabled={uiLocked || stage === 0}
-            >
-              Назад
-            </button>
-            <button
-              className={cls("btnPrimary", (!canNext || uiLocked || stage === 5) && "disabled")}
-              onClick={onNext}
-              disabled={uiLocked || !canNext || stage === 5}
-              style={stage === 4 ? { minWidth: 200 } : {}}
-            >
-              {usbChecking ? "Поиск флешки…" : pgVerifying ? "Проверяю…" : stage === 4 ? "Начать установку" : "Далее"}
-            </button>
-            <button className="btn" onClick={onCancel}>
+            <button type="button" className="btnCancel" onClick={onCancel}>
               Отмена
             </button>
+            <div className="footerRight">
+              <button
+                type="button"
+                className={cls("btnFooterBack", (uiLocked || stage === 0) && "disabled")}
+                onClick={() => {
+                  if (uiLocked || stage === 0) return;
+                  setStage((s) => (s > 0 ? ((s - 1) as any) : s));
+                }}
+                disabled={uiLocked || stage === 0}
+                aria-label="Назад"
+              >
+                <svg width="13" height="18" viewBox="0 0 13 18" aria-hidden="true">
+                  <path d="M9.8 2.2 3.2 9l6.6 6.8" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                className={cls("btnPrimary", nextDisabled && "disabled")}
+                onClick={isFinalInstallStep ? onStart : onNext}
+                disabled={nextDisabled}
+              >
+                {usbChecking ? "Поиск флешки…" : pgVerifying ? "Проверяю…" : isFinalInstallStep ? "Установить" : "Далее"}
+              </button>
+            </div>
           </div>
         </div>
       )}
 
-      {/* During installation - only Cancel button */}
       {isInstalling && (
         <div className="footerBar">
-          <div className="footerInner" style={{ justifyContent: "center" }}>
-            <button className="btn" onClick={onCancel} style={{ minWidth: 140 }}>
+          <div className="footerInner">
+            <button type="button" className="btnCancel" onClick={onCancel}>
               Отмена
             </button>
           </div>
         </div>
       )}
 
-      {/* After installation - no buttons, just close via window controls */}
-      {installDone && (
+      {showInstallDone && (
         <div className="footerBar">
-          <div className="footerInner" style={{ justifyContent: "center" }}>
-            <button className="btnPrimary" onClick={onCancel} style={{ minWidth: 140 }}>
+          <div className="footerInner doneFooter">
+            <button type="button" className="btnPrimary" onClick={onCancel} style={{ minWidth: 160 }}>
               {openCyberstab ? "Закрыть и открыть" : "Закрыть"}
             </button>
           </div>
