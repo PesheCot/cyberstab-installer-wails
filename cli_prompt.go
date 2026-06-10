@@ -142,6 +142,68 @@ func promptInstallComponents() (installServer, installClients, installDB bool, e
 
 const pgMaxAttempts = 3
 
+func runPostgresPasswordReset(app *App, user string) (string, error) {
+	user = strings.TrimSpace(user)
+	if user == "" {
+		return "", fmt.Errorf("укажите пользователя PostgreSQL")
+	}
+
+	printCLISection("Забыли пароль?")
+	cliHint("Сброс через локальный доступ СУБД (peer/trust). Нужны права root или администратора.")
+	cliSummaryLine("Пользователь", user)
+
+	newPass, err := promptPassword("Новый пароль")
+	if err != nil {
+		return "", err
+	}
+	if newPass == "" {
+		return "", fmt.Errorf("новый пароль не должен быть пустым")
+	}
+	newPass2, err := promptPassword("Повторите новый пароль")
+	if err != nil {
+		return "", err
+	}
+	if newPass != newPass2 {
+		return "", fmt.Errorf("пароли не совпадают")
+	}
+
+	if err := app.ResetPostgresPassword(user, newPass); err != nil {
+		return "", err
+	}
+	cliOK(fmt.Sprintf("Пароль для %s изменён", user))
+
+	if err := app.VerifyPostgresPassword(user, newPass); err != nil {
+		return "", fmt.Errorf("пароль сменён, но проверка не прошла: %w", err)
+	}
+	cliOK("Подключение и права подтверждены")
+	return newPass, nil
+}
+
+func promptPostgresAuthMode() (string, error) {
+	return promptSelect("Учётные данные PostgreSQL", []huh.Option[string]{
+		huh.NewOption("Ввести пароль", "enter"),
+		huh.NewOption("Забыли пароль — задать новый", "reset"),
+	}, "enter")
+}
+
+func pgRetryOptionsInstall() []huh.Option[string] {
+	return []huh.Option[string]{
+		huh.NewOption("Ввести другой пароль", "password"),
+		huh.NewOption("Забыли пароль — задать новый", "reset"),
+		huh.NewOption("Сменить пользователя и пароль", "both"),
+		huh.NewOption("Отменить установку", "cancel"),
+	}
+}
+
+func pgRetryOptionsUninstall() []huh.Option[string] {
+	return []huh.Option[string]{
+		huh.NewOption("Ввести другой пароль", "password"),
+		huh.NewOption("Забыли пароль — задать новый", "reset"),
+		huh.NewOption("Сменить пользователя и пароль", "both"),
+		huh.NewOption("Пропустить очистку БД", "skip"),
+	}
+}
+
 func promptPostgresCredentials(app *App) (user, pass string, err error) {
 	user = "postgres"
 	retryUser := true
@@ -154,6 +216,22 @@ func promptPostgresCredentials(app *App) (user, pass string, err error) {
 			}
 			if user == "" {
 				user = "postgres"
+			}
+
+			mode, err := promptPostgresAuthMode()
+			if err != nil {
+				return "", "", err
+			}
+			if mode == "reset" {
+				pass, err = runPostgresPasswordReset(app, user)
+				if err != nil {
+					cliError(err.Error())
+					if attempt >= pgMaxAttempts {
+						break
+					}
+					continue
+				}
+				return user, pass, nil
 			}
 		}
 
@@ -177,17 +255,21 @@ func promptPostgresCredentials(app *App) (user, pass string, err error) {
 			break
 		}
 
-		action, err := promptSelect("Что сделать?", []huh.Option[string]{
-			huh.NewOption("Ввести другой пароль", "password"),
-			huh.NewOption("Сменить пользователя и пароль", "both"),
-			huh.NewOption("Отменить установку", "cancel"),
-		}, "password")
+		action, err := promptSelect("Что сделать?", pgRetryOptionsInstall(), "password")
 		if err != nil {
 			return "", "", err
 		}
 		switch action {
 		case "cancel":
 			return "", "", fmt.Errorf("установка отменена пользователем")
+		case "reset":
+			pass, err = runPostgresPasswordReset(app, user)
+			if err != nil {
+				cliError(err.Error())
+				retryUser = false
+				continue
+			}
+			return user, pass, nil
 		case "both":
 			retryUser = true
 		default:
@@ -210,6 +292,22 @@ func promptPostgresCredentialsUninstall(app *App) (user, pass string, err error)
 			}
 			if strings.TrimSpace(user) == "" {
 				user = "postgres"
+			}
+
+			mode, err := promptPostgresAuthMode()
+			if err != nil {
+				return "", "", err
+			}
+			if mode == "reset" {
+				pass, err = runPostgresPasswordReset(app, user)
+				if err != nil {
+					cliError(err.Error())
+					if attempt >= pgMaxAttempts {
+						break
+					}
+					continue
+				}
+				return user, pass, nil
 			}
 		}
 
@@ -234,17 +332,21 @@ func promptPostgresCredentialsUninstall(app *App) (user, pass string, err error)
 			break
 		}
 
-		action, err := promptSelect("Что сделать?", []huh.Option[string]{
-			huh.NewOption("Ввести другой пароль", "password"),
-			huh.NewOption("Сменить пользователя и пароль", "both"),
-			huh.NewOption("Пропустить очистку БД", "skip"),
-		}, "password")
+		action, err := promptSelect("Что сделать?", pgRetryOptionsUninstall(), "password")
 		if err != nil {
 			return "", "", err
 		}
 		switch action {
 		case "skip":
 			return "", "", fmt.Errorf("skip_db")
+		case "reset":
+			pass, err = runPostgresPasswordReset(app, user)
+			if err != nil {
+				cliError(err.Error())
+				retryUser = false
+				continue
+			}
+			return user, pass, nil
 		case "both":
 			retryUser = true
 		default:
