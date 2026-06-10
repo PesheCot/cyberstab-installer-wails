@@ -439,6 +439,10 @@ END $$;`)
 	return err
 }
 
+func alterUserPasswordSQL(username, newPassword string) string {
+	return fmt.Sprintf("ALTER USER %s WITH PASSWORD '%s';", pqIdent(username), strings.ReplaceAll(newPassword, "'", "''"))
+}
+
 func SetUserPassword(username, newPassword string) error {
 	username = strings.TrimSpace(username)
 	if username == "" {
@@ -447,12 +451,7 @@ func SetUserPassword(username, newPassword string) error {
 	if newPassword == "" {
 		return errors.New("новый пароль не должен быть пустым")
 	}
-	sql := fmt.Sprintf("ALTER USER %s WITH PASSWORD '%s';", pqIdent(username), strings.ReplaceAll(newPassword, "'", "''"))
-	_, err := runPSQLAsLocalSuperuser("postgres", sql)
-	if err != nil {
-		return fmt.Errorf("не удалось сменить пароль для %s: %w", username, err)
-	}
-	return nil
+	return setUserPasswordPlatform(username, newPassword)
 }
 
 func runPSQLAuth(user, password, dbName, sql string) (string, error) {

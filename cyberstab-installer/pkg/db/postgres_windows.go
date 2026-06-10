@@ -4,6 +4,7 @@ package db
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -71,4 +72,12 @@ func StartPostgresServiceBestEffort() {
 
 func runPSQLAsLocalSuperuser(dbName, sql string) (string, error) {
 	return runPSQLAuth("postgres", "", dbName, sql)
+}
+
+func setUserPasswordPlatform(username, newPassword string) error {
+	sql := alterUserPasswordSQL(username, newPassword)
+	if _, err := runPSQLAsLocalSuperuser("postgres", sql); err != nil {
+		return fmt.Errorf("не удалось сменить пароль для %s (запустите установщик от администратора): %w", username, err)
+	}
+	return nil
 }
