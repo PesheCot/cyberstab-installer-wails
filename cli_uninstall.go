@@ -4,7 +4,8 @@ package main
 
 import (
 	"fmt"
-	"strings"
+
+	"github.com/charmbracelet/huh"
 )
 
 func runCLIUninstall(app *App) error {
@@ -12,15 +13,13 @@ func runCLIUninstall(app *App) error {
 		return err
 	}
 
-	fmt.Println("=== Удаление Киберстаб (консольный режим) ===")
-	fmt.Println()
-	fmt.Println("Будут удалены папка установки, база okidoci_db, роли okidoci_*/oki_*,")
-	fmt.Println("задачи автозапуска и ярлыки. Сам PostgreSQL не удаляется.")
-	fmt.Println()
+	printCLIBanner("Удаление", "консольный режим")
+	cliHint("Будут удалены папка установки, база okidoci_db, роли okidoci_*/oki_*,")
+	cliHint("задачи автозапуска и ярлыки. Сам PostgreSQL не удаляется.")
 
 	installDir := defaultInstallDir()
 	if isWindows() {
-		v, err := readLine(fmt.Sprintf("Папка установки [%s]: ", installDir))
+		v, err := promptInput("Папка установки", installDir, installDir)
 		if err != nil {
 			return err
 		}
@@ -28,10 +27,11 @@ func runCLIUninstall(app *App) error {
 			installDir = v
 		}
 	} else {
-		fmt.Printf("Папка установки: %s\n", installDir)
+		printCLISection("Папка установки")
+		cliSummaryLine("Путь", installDir)
 	}
 
-	skipDB, err := askYesNo("Пропустить удаление базы данных?", false)
+	skipDB, err := promptConfirm("Пропустить удаление базы данных?", false)
 	if err != nil {
 		return err
 	}
@@ -41,50 +41,59 @@ func runCLIUninstall(app *App) error {
 	pgPass := ""
 
 	if !skipDB {
+		printCLISection("PostgreSQL / СУБД")
 		result, err := app.CheckDbInstalled()
 		if err != nil {
 			return err
 		}
 		if !result.Installed {
-			fmt.Println("Предупреждение: СУБД не найдена, очистка БД будет пропущена.")
+			cliWarn("СУБД не найдена — очистка БД будет пропущена.")
 			skipDB = true
 		} else {
 			engines := result.Engines
 			if len(engines) > 1 {
-				labels := make([]string, len(engines))
+				opts := make([]huh.Option[string], len(engines))
 				for i, e := range engines {
-					labels[i] = fmt.Sprintf("%s (%s)", e.Label, e.BinDir)
+					opts[i] = huh.NewOption(fmt.Sprintf("%s (%s)", e.Label, e.BinDir), e.Kind)
 				}
-				idx, err := askChoice("Выберите движок СУБД", labels, 0)
+				kind, err := promptSelect("Выберите движок СУБД", opts, engines[0].Kind)
 				if err != nil {
 					return err
 				}
-				dbEngine = engines[idx].Kind
+				dbEngine = kind
 			} else if len(engines) == 1 {
 				dbEngine = engines[0].Kind
 			}
-			pgUser, err = readLine("Пользователь PostgreSQL [postgres]: ")
+			pgUser, pgPass, err = promptPostgresCredentialsUninstall(app)
 			if err != nil {
-				return err
-			}
-			if strings.TrimSpace(pgUser) == "" {
-				pgUser = "postgres"
-			}
-			pgPass, err = readPassword("Пароль PostgreSQL: ")
-			if err != nil {
-				return err
+				if err.Error() == "skip_db" {
+					skipDB = true
+				} else {
+					return err
+				}
 			}
 		}
 	}
 
-	ok, err := askYesNo("\nПодтвердить удаление?", false)
+	printCLISection("Подтверждение")
+	cliSummaryLine("Папка", installDir)
+	if skipDB {
+		cliSummaryLine("БД", "пропуск")
+	} else {
+		cliSummaryLine("БД", "удалить okidoci_db и роли")
+	}
+
+	ok, err := promptConfirm("Подтвердить удаление?", false)
 	if err != nil {
 		return err
 	}
 	if !ok {
-		fmt.Println("Отменено.")
+		cliHint("Отменено.")
 		return nil
 	}
+
+	fmt.Println()
+	printCLISection("Удаление")
 
 	opts := UninstallOptions{
 		InstallDir:       installDir,
@@ -98,9 +107,11 @@ func runCLIUninstall(app *App) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println("\nРезультат:", res.Report)
+	fmt.Println()
+	cliOK("Готово.")
+	cliSummaryLine("Результат", res.Report)
 	if res.Deferred {
-		fmt.Println("Некоторые файлы будут удалены после завершения процесса.")
+		cliWarn("Некоторые файлы будут удалены после завершения процесса.")
 	}
 	return nil
 }

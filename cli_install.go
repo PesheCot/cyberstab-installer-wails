@@ -5,6 +5,8 @@ package main
 import (
 	"fmt"
 	"strings"
+
+	"github.com/charmbracelet/huh"
 )
 
 func runCLIInstall(app *App) error {
@@ -12,27 +14,13 @@ func runCLIInstall(app *App) error {
 		return err
 	}
 
-	fmt.Println("=== Установщик Киберстаб (консольный режим) ===")
-	fmt.Println()
+	printCLIBanner("Установщик", "консольный режим")
 
-	installServer, err := askYesNo("Установить сервер?", true)
+	installServer, installClients, installDB, err := promptInstallComponents()
 	if err != nil {
 		return err
 	}
-	installClients, err := askYesNo("Установить клиент?", true)
-	if err != nil {
-		return err
-	}
-	installDB, err := askYesNo("Установить/инициализировать базу данных?", false)
-	if err != nil {
-		return err
-	}
-	if installDB {
-		installServer = false
-	}
-	if !installServer && !installClients && !installDB {
-		return fmt.Errorf("нужно выбрать хотя бы один компонент")
-	}
+	cliSummaryLine("Компоненты", componentModeLabel(installServer, installClients, installDB))
 
 	needsPG := installServer || installDB
 	dbEngine := ""
@@ -40,55 +28,42 @@ func runCLIInstall(app *App) error {
 	pgPass := ""
 
 	if needsPG {
-		fmt.Println("\n--- PostgreSQL / СУБД ---")
+		printCLISection("PostgreSQL / СУБД")
 		result, err := app.CheckDbInstalled()
 		if err != nil {
 			return err
 		}
 		if !result.Installed {
-			return fmt.Errorf("СУБД не найдена. Установите PostgreSQL и повторите, либо укажите путь к bin вручную (GUI)")
+			return fmt.Errorf("СУБД не найдена — установите PostgreSQL и повторите")
 		}
 		engines := result.Engines
 		if len(engines) > 1 {
-			labels := make([]string, len(engines))
+			opts := make([]huh.Option[string], len(engines))
 			for i, e := range engines {
-				labels[i] = fmt.Sprintf("%s (%s)", e.Label, e.BinDir)
+				opts[i] = huh.NewOption(fmt.Sprintf("%s (%s)", e.Label, e.BinDir), e.Kind)
 			}
-			idx, err := askChoice("Выберите движок СУБД", labels, 0)
+			kind, err := promptSelect("Выберите движок СУБД", opts, engines[0].Kind)
 			if err != nil {
 				return err
 			}
-			dbEngine = engines[idx].Kind
+			dbEngine = kind
 		} else if len(engines) == 1 {
 			dbEngine = engines[0].Kind
+			cliSummaryLine("СУБД", engines[0].Label)
 		}
 		if dbEngine != "" {
 			_ = app.SelectDbEngine(dbEngine)
 		}
 
-		pgUser, err = readLine("Пользователь PostgreSQL [postgres]: ")
+		pgUser, pgPass, err = promptPostgresCredentials(app)
 		if err != nil {
 			return err
 		}
-		if pgUser == "" {
-			pgUser = "postgres"
-		}
-		pgPass, err = readPassword("Пароль PostgreSQL: ")
-		if err != nil {
-			return err
-		}
-		if pgPass == "" {
-			return fmt.Errorf("нужен пароль СУБД")
-		}
-		if err := app.VerifyPostgresPassword(pgUser, pgPass); err != nil {
-			return fmt.Errorf("проверка учётных данных: %w", err)
-		}
-		fmt.Println("Подключение и права подтверждены.")
 	}
 
 	installDir := defaultInstallDir()
 	if isWindows() {
-		v, err := readLine(fmt.Sprintf("Папка установки [%s]: ", installDir))
+		v, err := promptInput("Папка установки", installDir, installDir)
 		if err != nil {
 			return err
 		}
@@ -96,17 +71,18 @@ func runCLIInstall(app *App) error {
 			installDir = v
 		}
 	} else {
-		fmt.Printf("\nПапка установки: %s\n", installDir)
+		printCLISection("Папка установки")
+		cliSummaryLine("Путь", installDir)
 	}
 
-	fmt.Println("\n--- Дистрибутив ---")
+	printCLISection("Дистрибутив")
 	sourceRoot, err := app.AutoDetectSourceRoot(installServer || installDB, installClients)
 	if err != nil {
 		return err
 	}
 	if sourceRoot != "" {
-		fmt.Printf("Найден дистрибутив: %s\n", sourceRoot)
-		use, err := askYesNo("Использовать этот путь?", true)
+		cliSummaryLine("Найден", sourceRoot)
+		use, err := promptConfirm("Использовать этот путь?", true)
 		if err != nil {
 			return err
 		}
@@ -115,7 +91,7 @@ func runCLIInstall(app *App) error {
 		}
 	}
 	if sourceRoot == "" {
-		sourceRoot, err = readLine("Путь к папке с CyberstabServer*/CyberstabClient*: ")
+		sourceRoot, err = promptInput("Путь к папке с CyberstabServer*/CyberstabClient*", "", "")
 		if err != nil {
 			return err
 		}
@@ -127,20 +103,18 @@ func runCLIInstall(app *App) error {
 	dbAction := ""
 	restoreSQL := ""
 	if needsPG {
-		fmt.Println("\n--- База данных ---")
-		choices := []string{"Создать новую / пересоздать", "Оставить текущую", "Восстановить из .sql"}
-		idx, err := askChoice("Действие с БД", choices, 0)
+		printCLISection("База данных")
+		action, err := promptSelect("Действие с БД", []huh.Option[string]{
+			huh.NewOption("Создать новую / пересоздать", "new"),
+			huh.NewOption("Оставить текущую", "skip"),
+			huh.NewOption("Восстановить из .sql", "restore"),
+		}, "new")
 		if err != nil {
 			return err
 		}
-		switch idx {
-		case 0:
-			dbAction = "new"
-		case 1:
-			dbAction = "skip"
-		case 2:
-			dbAction = "restore"
-			restoreSQL, err = readLine("Путь к файлу .sql: ")
+		dbAction = action
+		if action == "restore" {
+			restoreSQL, err = promptInput("Путь к файлу .sql", "", "")
 			if err != nil {
 				return err
 			}
@@ -156,28 +130,33 @@ func runCLIInstall(app *App) error {
 		return err
 	}
 	if conflict.Exists {
-		reinstall, err := askYesNo("Папка установки уже существует. Переустановить (скопировать файлы заново)?", true)
+		reinstall, err := promptConfirm("Папка уже существует — переустановить (скопировать заново)?", true)
 		if err != nil {
 			return err
 		}
 		reinstallExisting = reinstall
 	}
 
-	fmt.Println("\n--- Сводка ---")
-	fmt.Printf("  Сервер: %v, Клиент: %v, БД: %v\n", installServer, installClients, installDB)
-	fmt.Printf("  Установка в: %s\n", installDir)
-	fmt.Printf("  Дистрибутив: %s\n", sourceRoot)
+	printCLISection("Сводка")
+	cliSummaryLine("Компоненты", componentModeLabel(installServer, installClients, installDB))
+	cliSummaryLine("Установка в", installDir)
+	cliSummaryLine("Дистрибутив", sourceRoot)
 	if needsPG {
-		fmt.Printf("  СУБД: %s, пользователь: %s\n", dbEngine, pgUser)
+		cliSummaryLine("СУБД", dbEngine)
+		cliSummaryLine("Пользователь", pgUser)
 	}
-	ok, err := askYesNo("\nНачать установку?", true)
+
+	ok, err := promptConfirm("Начать установку?", true)
 	if err != nil {
 		return err
 	}
 	if !ok {
-		fmt.Println("Отменено.")
+		cliHint("Отменено.")
 		return nil
 	}
+
+	fmt.Println()
+	printCLISection("Установка")
 
 	opts := StartInstallOptions{
 		InstallServer:     installServer,
@@ -188,35 +167,43 @@ func runCLIInstall(app *App) error {
 		PostgresUser:      pgUser,
 		PostgresPassword:  pgPass,
 		InstallDir:        installDir,
-		DbAction:            dbAction,
+		DbAction:          dbAction,
 		RestoreSqlPath:    restoreSQL,
 		ReinstallExisting: reinstallExisting,
 	}
 
 	var lastStep int
+	var lastDeployPct, lastDBPct int
 	cb := InstallCallbacks{
 		OnSteps: func(steps []installerStepDTO) {
 			for _, s := range steps {
 				if s.IsActive && s.Index != lastStep {
 					lastStep = s.Index
-					fmt.Printf("[%d] %s\n", s.Index, s.Description)
+					fmt.Println(cliLabelStyle.Render(fmt.Sprintf("  [%d]", s.Index)) + " " + s.Description)
 				}
 				if s.ErrorText != "" {
-					fmt.Printf("  Ошибка: %s\n", s.ErrorText)
+					cliError(s.ErrorText)
 				}
 			}
 		},
 		OnProgress: func(pct int, status string, _ []installerStepDTO) {
-			fmt.Printf("[DB] %d%% %s\n", pct, status)
+			if pct != lastDBPct {
+				lastDBPct = pct
+				cliProgressBar(pct, "БД: "+status)
+			}
 		},
 		OnDeploy: func(pct int, status string) {
-			fmt.Printf("[DEPLOY] %d%% %s\n", pct, status)
+			if pct != lastDeployPct {
+				lastDeployPct = pct
+				cliProgressBar(pct, status)
+			}
 		},
 	}
 
 	if err := app.runInstall(opts, cb); err != nil {
 		return err
 	}
-	fmt.Println("\nУстановка завершена успешно.")
+	fmt.Println()
+	cliOK("Установка завершена успешно.")
 	return nil
 }
