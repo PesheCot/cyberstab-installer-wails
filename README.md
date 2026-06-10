@@ -39,9 +39,45 @@ cd ..\cyberstab-installer-wails
 wails dev -s -frontenddevserverurl http://127.0.0.1:5173 -v 2 -nocolour
 ```
 
-## Сборка релиза
+## Сборка релиза (Windows)
 ```powershell
-wails build
+.\build-windows.ps1
+```
+
+## Сборка Linux-установщика с Windows
+
+Wails **не умеет** собирать Linux `.exe`/бинарник напрямую с Windows (`Crosscompiling to Linux not currently supported`).
+Нужен **WSL** (Ubuntu) или **GitHub Actions**.
+
+### Вариант A: WSL на этой машине
+
+1. Установите WSL: `wsl --install -d Ubuntu` (перезагрузка)
+2. В Ubuntu:
+   ```bash
+   sudo apt update
+   sudo apt install -y libgtk-3-dev libwebkit2gtk-4.1-dev build-essential
+   go install github.com/wailsapp/wails/v2/cmd/wails@latest
+   ```
+3. На Windows из папки проекта:
+   ```powershell
+   .\build-linux.ps1
+   ```
+4. Результат: `build\bin\install` — скопируйте на Linux и запустите:
+   ```bash
+   chmod +x install
+   sudo ./install
+   ```
+
+### Вариант B: GitHub Actions (без WSL)
+
+1. Запушьте код в GitHub
+2. Откройте **Actions → Build Linux installer → Run workflow**
+3. Скачайте артефакт `cyberstab-install-linux-amd64`
+
+### Сборка на самом Linux
+```bash
+chmod +x build-linux.sh
+./build-linux.sh
 ```
 
 ### Чтобы на Windows не появлялась консоль

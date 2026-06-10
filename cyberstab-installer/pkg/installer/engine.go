@@ -15,7 +15,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"cyberstab-installer/pkg/db"
@@ -154,20 +153,6 @@ func (e *Engine) writeEmbeddedUninstallerWindows() error {
 	refreshWindowsIconCache()
 	log.Printf("[INSTALL] Uninstaller written: %s (%d bytes)", unPath, len(e.UninstallerData))
 	return nil
-}
-
-func refreshWindowsIconCache() {
-	if runtime.GOOS != "windows" {
-		return
-	}
-	shell32 := syscall.NewLazyDLL("shell32.dll")
-	shChangeNotify := shell32.NewProc("SHChangeNotify")
-	const (
-		shcneAssocChanged = 0x08000000
-		shcnfIDList       = 0x0000
-	)
-	_, _, _ = shChangeNotify.Call(uintptr(shcneAssocChanged), uintptr(shcnfIDList), 0, 0)
-	_ = runHidden("ie4uinit.exe", "-show")
 }
 
 func (e *Engine) SetUpdateHandler(fn func()) {
@@ -391,6 +376,9 @@ func (e *Engine) run() error {
 		}
 
 		// Set permissions for client folder IMMEDIATELY after copying
+		if runtime.GOOS == "linux" && e.Options.Components.InstallClients {
+			_ = setClientFolderPermissionsLinux(dst)
+		}
 		if runtime.GOOS == "windows" && e.Options.Components.InstallClients {
 			log.Printf("[INSTALL] Step 3.1: Setting client folder permissions...")
 			log.Printf("[INSTALL] InstallClients = true, dst = %s", dst)
@@ -566,10 +554,7 @@ func (e *Engine) run() error {
 				// Start server with proper working directory
 				cmd := exec.Command(serverPath)
 				cmd.Dir = filepath.Dir(serverPath)
-				cmd.SysProcAttr = &syscall.SysProcAttr{
-					HideWindow:    true,
-					CreationFlags: 0x00000008 | 0x08000000, // DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
-				}
+				hideCmdDetached(cmd)
 
 				if err := cmd.Start(); err != nil {
 					if e.ProgressEmitter != nil {
@@ -600,6 +585,12 @@ func (e *Engine) run() error {
 				if e.ProgressEmitter != nil {
 					e.ProgressEmitter(90, "Сервер не найден, только автозапуск")
 				}
+			}
+		}
+
+		if runtime.GOOS == "linux" {
+			if err := finishInstallLinux(e); err != nil {
+				return err
 			}
 		}
 
@@ -646,7 +637,7 @@ func InstallPostgresFromSource(sourceRoot string) error {
 	}
 	cmd := exec.Command(hit)
 	if runtime.GOOS == "windows" {
-		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		hideCmd(cmd)
 	}
 	if err := cmd.Start(); err != nil {
 		return err
@@ -802,6 +793,11 @@ func CancelActiveInstallerProcesses() {
 			_ = runHidden("taskkill.exe", "/F", "/IM", name, "/T")
 		}
 	}
+	if runtime.GOOS == "linux" {
+		for _, name := range []string{"dbupdater", "CyberstabDbUpdaterLinux", "CyberstabServerLinux"} {
+			_ = runLinuxCmd("pkill", "-f", name)
+		}
+	}
 }
 
 func killProcessTree(p *os.Process) {
@@ -881,7 +877,7 @@ func runDbUpdaterOnce(exePath string, installDir string, args []string, pgUser, 
 		cmd.Env = append(cmd.Env, "PGPASSWORD="+pgPassword)
 	}
 	if runtime.GOOS == "windows" {
-		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		hideCmd(cmd)
 	}
 	var out bytes.Buffer
 	cmd.Stdout = &out
@@ -1001,16 +997,23 @@ func findServerProperties(installDir string) (string, error) {
 }
 
 func findDbUpdater(installDir string) (string, error) {
-	// Common expected locations:
-	// - <installDir>\dbupdater\dbupdater.exe
-	// - <installDir>\CyberstabServerWindows*\dbupdater\CyberstabDbUpdaterWindows.exe
-	// - <installDir>\CyberstabServerWindows*\dbupdater\dbupdater.exe
-	// - <installDir>\CyberstabServerWindows*\dbupdater.exe
-	candidates := []string{
-		filepath.Join(installDir, "dbupdater", "dbupdater.exe"),
-		filepath.Join(installDir, "dbupdater", "CyberstabDbUpdaterWindows.exe"),
-		filepath.Join(installDir, "dbupdater.exe"),
-		filepath.Join(installDir, "CyberstabDbUpdaterWindows.exe"),
+	var candidates []string
+	if runtime.GOOS == "windows" {
+		candidates = []string{
+			filepath.Join(installDir, "dbupdater", "dbupdater.exe"),
+			filepath.Join(installDir, "dbupdater", "CyberstabDbUpdaterWindows.exe"),
+			filepath.Join(installDir, "dbupdater.exe"),
+			filepath.Join(installDir, "CyberstabDbUpdaterWindows.exe"),
+		}
+	} else {
+		candidates = []string{
+			filepath.Join(installDir, "dbupdater", "dbupdater"),
+			filepath.Join(installDir, "dbupdater", "CyberstabDbUpdaterLinux"),
+			filepath.Join(installDir, "dbupdater"),
+			filepath.Join(installDir, "CyberstabDbUpdaterLinux"),
+			filepath.Join(installDir, "CyberstabServerLinux", "dbupdater", "dbupdater"),
+			filepath.Join(installDir, "CyberstabServerLinux", "dbupdater", "CyberstabDbUpdaterLinux"),
+		}
 	}
 	for _, c := range candidates {
 		if st, err := os.Stat(c); err == nil && !st.IsDir() {
@@ -1034,7 +1037,12 @@ func findDbUpdater(installDir string) (string, error) {
 			return nil
 		}
 		name := strings.ToLower(d.Name())
-		if name == "dbupdater.exe" || name == "cyberstabdbupdaterwindows.exe" || strings.Contains(name, "dbupdater") && strings.HasSuffix(name, ".exe") {
+		if runtime.GOOS == "windows" {
+			if name == "dbupdater.exe" || name == "cyberstabdbupdaterwindows.exe" || strings.Contains(name, "dbupdater") && strings.HasSuffix(name, ".exe") {
+				hit = path
+				return filepath.SkipAll
+			}
+		} else if name == "dbupdater" || name == "cyberstabdbupdaterlinux" || strings.Contains(name, "dbupdater") {
 			hit = path
 			return filepath.SkipAll
 		}
@@ -1164,6 +1172,9 @@ func cleanOldInstallationFolders(installDir string) error {
 
 // stopCyberstabProcesses terminates any running Cyberstab processes to avoid file locks during installation.
 func stopCyberstabProcesses() error {
+	if runtime.GOOS == "linux" {
+		return stopCyberstabProcessesLinux()
+	}
 	if runtime.GOOS != "windows" {
 		return nil
 	}
@@ -1182,7 +1193,7 @@ func stopCyberstabProcesses() error {
 	for _, procName := range processNames {
 		// Use taskkill to terminate processes
 		cmd := exec.Command("taskkill.exe", "/F", "/IM", procName, "/T")
-		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		hideCmd(cmd)
 		_ = cmd.Run()                      // Best effort, ignore errors
 		time.Sleep(200 * time.Millisecond) // Give each process time to exit
 	}
@@ -1190,7 +1201,7 @@ func stopCyberstabProcesses() error {
 	// Also try to stop Java processes that are running from Cyberstab directory
 	// This is more aggressive - only if other processes didn't stop
 	cmd := exec.Command("taskkill.exe", "/F", "/IM", "java.exe", "/T")
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	hideCmd(cmd)
 	_ = cmd.Run()
 
 	// Give processes a moment to release file handles
@@ -1219,7 +1230,7 @@ func createEmptyOkidociDB(pgPassword string) error {
 	runPsql := func(dbName, sql string) error {
 		cmd := exec.Command(psql, "-U", "postgres", "-d", dbName, "-c", sql)
 		cmd.Env = append(os.Environ(), "PGPASSWORD="+pgPassword)
-		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		hideCmd(cmd)
 
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout = &stdout
@@ -1419,7 +1430,7 @@ func setClientFolderPermissionsWindows(installDir string) error {
 		`, clientDir)
 
 		cmd := exec.Command("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", psScript)
-		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		hideCmd(cmd)
 		var out bytes.Buffer
 		cmd.Stdout = &out
 		cmd.Stderr = &out
@@ -1433,7 +1444,7 @@ func setClientFolderPermissionsWindows(installDir string) error {
 			// Method 2: Fallback to icacls.exe
 			log.Printf("[PERMS] [%d/%d] Method 2: Using icacls.exe fallback...", i+1, len(clientDirs))
 			cmd = exec.Command("icacls.exe", clientDir, "/grant:r", "Everyone:(OI)(CI)(F)", "/T", "/C")
-			cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+			hideCmd(cmd)
 			out.Reset()
 			cmd.Stdout = &out
 			cmd.Stderr = &out
@@ -1458,7 +1469,7 @@ func setClientFolderPermissionsWindows(installDir string) error {
 		// Verify permissions
 		log.Printf("[PERMS] [%d/%d] Verifying permissions...", i+1, len(clientDirs))
 		cmd = exec.Command("icacls.exe", clientDir)
-		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		hideCmd(cmd)
 		out.Reset()
 		cmd.Stdout = &out
 		cmd.Stderr = &out
@@ -1490,7 +1501,7 @@ func flushLog() {
 
 // runCmdWithOutputArgs runs a command and logs stdout/stderr
 func runCmdWithOutputArgs(cmd *exec.Cmd, prefix string) error {
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	hideCmd(cmd)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -1670,7 +1681,7 @@ func createClientDesktopShortcutWindows(installDir string) error {
 	// Method 1: Use icacls through cmd.exe to grant Read permissions to Users
 	cmdLine := fmt.Sprintf(`icacls.exe "%s" /grant:r *S-1-5-32-545:(R) /Q`, lnk)
 	cmd := exec.Command("cmd.exe", "/C", cmdLine)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	hideCmd(cmd)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
@@ -1684,7 +1695,7 @@ func createClientDesktopShortcutWindows(installDir string) error {
 		// Method 2: Try Everyone
 		cmdLine = fmt.Sprintf(`icacls.exe "%s" /grant:r Everyone:(R) /Q`, lnk)
 		cmd = exec.Command("cmd.exe", "/C", cmdLine)
-		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		hideCmd(cmd)
 		out.Reset()
 		cmd.Stdout = &out
 		cmd.Stderr = &out
@@ -1747,7 +1758,11 @@ func FindClientExeBestEffort(clientDir string) string {
 		}
 
 		name := strings.ToLower(d.Name())
-		if !strings.HasSuffix(name, ".exe") {
+		if runtime.GOOS == "windows" {
+			if !strings.HasSuffix(name, ".exe") {
+				return nil
+			}
+		} else if d.IsDir() || !isLikelyExecutable(path, d) {
 			return nil
 		}
 
@@ -1813,7 +1828,7 @@ func ensureServerAutostartWindows(installDir string, serverPath string) error {
 	// Verify task was created
 	var out bytes.Buffer
 	cmd := exec.Command("schtasks.exe", "/Query", "/TN", taskName, "/V", "/FO", "LIST")
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	hideCmd(cmd)
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 
@@ -1934,7 +1949,7 @@ func escapePS(s string) string {
 
 func runHidden(exe string, args ...string) error {
 	cmd := exec.Command(exe, args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	hideCmd(cmd)
 	var b bytes.Buffer
 	cmd.Stdout = &b
 	cmd.Stderr = &b
@@ -1950,7 +1965,7 @@ func runHidden(exe string, args ...string) error {
 
 func runCmdWithTimeout(timeout time.Duration, exe string, args ...string) (string, error) {
 	cmd := exec.Command(exe, args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	hideCmd(cmd)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

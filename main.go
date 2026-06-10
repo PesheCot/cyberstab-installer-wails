@@ -57,6 +57,13 @@ func main() {
 	log.Printf("Log file: %s", logFilePath)
 	log.Printf("=========================================")
 
+	if stdruntime.GOOS == "linux" {
+		e := installer.NewEngine()
+		if e.NeedSudo() && !previewInstallDoneRequested() {
+			log.Fatal("Для установки Cyberstab запустите установщик от root: sudo ./install")
+		}
+	}
+
 	// Windows: if started without admin rights, relaunch with UAC.
 	if stdruntime.GOOS == "windows" {
 		e := installer.NewEngine()

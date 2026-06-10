@@ -317,8 +317,7 @@ func (a *App) Uninstall(opts UninstallOptions) error {
 
 	var reports []string
 
-	// Windows: stop running server before touching DB/files to avoid locks.
-	if stdruntime.GOOS == "windows" {
+	if stdruntime.GOOS == "windows" || stdruntime.GOOS == "linux" {
 		_ = system.StopServer(strings.TrimSpace(opts.InstallDir))
 	}
 
@@ -358,19 +357,22 @@ func (a *App) Uninstall(opts UninstallOptions) error {
 	// 2. Remove installation directory, scheduled tasks, and shortcuts.
 	installDir := opts.InstallDir
 	if installDir == "" {
-		// Fallback to default paths.
-		candidates := []string{
-			`C:\Program Files\Cyberstab`,
-			`C:\cyberstab`,
-		}
-		for _, c := range candidates {
-			if st, err := os.Stat(c); err == nil && st.IsDir() {
-				installDir = c
-				break
+		if stdruntime.GOOS == "linux" {
+			installDir = system.DefaultInstallDir
+		} else {
+			candidates := []string{
+				`C:\Program Files\Cyberstab`,
+				`C:\cyberstab`,
 			}
-		}
-		if installDir == "" {
-			installDir = `C:\Program Files\Cyberstab`
+			for _, c := range candidates {
+				if st, err := os.Stat(c); err == nil && st.IsDir() {
+					installDir = c
+					break
+				}
+			}
+			if installDir == "" {
+				installDir = system.DefaultInstallDir
+			}
 		}
 	}
 
@@ -403,10 +405,9 @@ func (a *App) Uninstall(opts UninstallOptions) error {
 // ensurePgRunning ensures that PostgreSQL service is running.
 // On Windows, it attempts to start the service if it's stopped.
 func ensurePgRunning() {
-	if stdruntime.GOOS != "windows" {
-		return
+	if stdruntime.GOOS == "windows" || stdruntime.GOOS == "linux" {
+		db.StartPostgresServiceBestEffort()
 	}
-	db.StartPostgresServiceBestEffort()
 }
 
 // findPgDir finds the PostgreSQL installation directory.

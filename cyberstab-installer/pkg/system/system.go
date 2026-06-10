@@ -9,12 +9,8 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
-
-// DefaultInstallDir is used when UI does not provide an install dir.
-const DefaultInstallDir = `C:\Program Files\Cyberstab`
 
 type ServerStatus struct {
 	TaskExists bool
@@ -60,36 +56,6 @@ func taskkillBestEffort(imageName string) error {
 	return nil
 }
 
-func QueryServerStatus() (ServerStatus, error) {
-	if runtime.GOOS != "windows" {
-		return ServerStatus{}, fmt.Errorf("unsupported OS")
-	}
-	out, err := runCmd(5*time.Second, "schtasks.exe", "/Query", "/TN", scheduledTaskName, "/FO", "LIST", "/V")
-	if err != nil {
-		// schtasks returns non-zero when task not found
-		return ServerStatus{TaskExists: false, Running: false, Raw: strings.TrimSpace(out)}, nil
-	}
-	raw := strings.TrimSpace(out)
-	running := strings.Contains(strings.ToLower(raw), "status:") && strings.Contains(strings.ToLower(raw), "running")
-	return ServerStatus{TaskExists: true, Running: running, Raw: raw}, nil
-}
-
-func StartServer() error {
-	if runtime.GOOS != "windows" {
-		return fmt.Errorf("unsupported OS")
-	}
-	_, err := runCmd(10*time.Second, "schtasks.exe", "/Run", "/TN", scheduledTaskName)
-	return err
-}
-
-func StopServer(installDir string) error {
-	if runtime.GOOS != "windows" {
-		return fmt.Errorf("unsupported OS")
-	}
-	_, err := runCmd(10*time.Second, "schtasks.exe", "/End", "/TN", scheduledTaskName)
-	return err
-}
-
 func QueryServerConsoleInfo(installDir string, pgPassword string) (ServerConsoleInfo, error) {
 	// Best-effort: try to run an existing console tool if present.
 	// If your distribution has a different exe name/path, adjust here.
@@ -103,52 +69,6 @@ func QueryServerConsoleInfo(installDir string, pgPassword string) (ServerConsole
 	out, err := runCmd(8*time.Second, exe, "--info")
 	// We don't parse much here; keep raw for UI.
 	return ServerConsoleInfo{RawOutput: out}, err
-}
-
-// UninstallCyberstab removes installDir and related OS artefacts (best-effort).
-// Returns deferred=true when directory couldn't be removed immediately.
-func UninstallCyberstab(installDir string) (deferred bool, err error) {
-	if strings.TrimSpace(installDir) == "" {
-		installDir = DefaultInstallDir
-	}
-	exePath, _ := os.Executable()
-	pid := os.Getpid()
-
-	// Windows-only cleanup (tasks, shortcuts, uninstall registry).
-	if runtime.GOOS == "windows" {
-		// If server is running, stop it first to avoid locked files and DB connections.
-		stopCyberstabWindowsBestEffort()
-		_ = removeCyberstabScheduledTasks()
-		_ = removeCyberstabShortcuts(installDir)
-		_ = removeCyberstabUninstallRegistry(installDir)
-		_ = removeCyberstabInstallerArtifactsWindows()
-	}
-
-	// Remove directory.
-	if rmErr := os.RemoveAll(installDir); rmErr == nil {
-		// If the uninstaller executable is outside installDir (e.g. standalone),
-		// try to self-delete after exit.
-		if runtime.GOOS == "windows" && exePath != "" && !isPathUnder(exePath, installDir) {
-			_ = scheduleSelfDelete(pid, exePath, "")
-		}
-		return false, nil
-	}
-	// Retry via cmd rmdir (sometimes better on Windows with long paths).
-	if runtime.GOOS == "windows" {
-		_, _ = runCmd(20*time.Second, "cmd.exe", "/C", "rmdir", "/S", "/Q", installDir)
-		if _, stErr := os.Stat(installDir); stErr != nil {
-			if exePath != "" && !isPathUnder(exePath, installDir) {
-				_ = scheduleSelfDelete(pid, exePath, "")
-			}
-			return false, nil
-		}
-	}
-
-	// Last resort: schedule deletion after this process exits (handles "self inside folder").
-	if runtime.GOOS == "windows" {
-		_ = scheduleSelfDelete(pid, exePath, installDir)
-	}
-	return true, fmt.Errorf("папка %s будет удалена после закрытия деинсталлятора", installDir)
 }
 
 func removeCyberstabInstallerArtifactsWindows() error {
@@ -292,15 +212,13 @@ func scheduleSelfDelete(pid int, exePath string, installDir string) error {
 
 	// Fire-and-forget, hidden window.
 	cmd := exec.Command("cmd.exe", "/C", script)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	hideCmd(cmd)
 	return cmd.Start()
 }
 
 func runCmd(timeout time.Duration, exe string, args ...string) (string, error) {
 	cmd := exec.Command(exe, args...)
-	if runtime.GOOS == "windows" {
-		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	}
+	hideCmd(cmd)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

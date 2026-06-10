@@ -12,7 +12,6 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
-	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -224,9 +223,7 @@ func DumpDatabaseSQL(user, password string, dbName string, outputPath string) er
 	// Plain SQL format (-Fp) is easiest for manual restore/debugging.
 	args := []string{"-U", user, "-d", dbName, "-Fp"}
 	cmd := exec.Command(pgDump, args...)
-	if runtime.GOOS == "windows" {
-		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	}
+	hideCmd(cmd)
 	cmd.Env = os.Environ()
 	cmd.Env = append(cmd.Env, "PGCONNECT_TIMEOUT=10")
 	if strings.TrimSpace(password) != "" {
@@ -263,9 +260,7 @@ func DropOkidociDB(user, password string) error {
 	runPsql := func(dbName, sql string) error {
 		cmd := exec.Command(psql, "-U", user, "-d", dbName, "-c", sql)
 		cmd.Env = append(os.Environ(), "PGPASSWORD="+password)
-		if runtime.GOOS == "windows" {
-			cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-		}
+		hideCmd(cmd)
 
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout = &stdout
@@ -356,9 +351,7 @@ func runPSQLWithLog(user, password, dbName, sql string) error {
 	if strings.TrimSpace(password) != "" {
 		cmd.Env = append(cmd.Env, "PGPASSWORD="+password)
 	}
-	if runtime.GOOS == "windows" {
-		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	}
+	hideCmd(cmd)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -397,9 +390,7 @@ func runPSQLQuiet(user, password, dbName, sql string) (string, error) {
 	if strings.TrimSpace(password) != "" {
 		cmd.Env = append(cmd.Env, "PGPASSWORD="+password)
 	}
-	if runtime.GOOS == "windows" {
-		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	}
+	hideCmd(cmd)
 
 	// Discard all output
 	cmd.Stdout = nil
@@ -465,11 +456,6 @@ func SetUserPassword(username, newPassword string) error {
 	return nil
 }
 
-func StartPostgresServiceBestEffort() {
-	// Best-effort and intentionally quiet.
-	// Real implementation depends on how PostgreSQL is installed (service name varies).
-}
-
 func runPSQLAuth(user, password, dbName, sql string) (string, error) {
 	user = normalizePgUser(user)
 	info, err := CheckPostgres()
@@ -486,9 +472,7 @@ func runPSQLAuth(user, password, dbName, sql string) (string, error) {
 
 	args := []string{"-U", user, "-d", dbName, "-t", "-A", "-c", sql}
 	cmd := exec.CommandContext(ctx, psql, args...)
-	if runtime.GOOS == "windows" {
-		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	}
+	hideCmd(cmd)
 	cmd.Env = append(os.Environ(), "PGCONNECT_TIMEOUT=5")
 	if password != "" {
 		cmd.Env = append(cmd.Env, "PGPASSWORD="+password)
@@ -593,68 +577,6 @@ func extractQuotedRole(s string) string {
 		return m[1]
 	}
 	return ""
-}
-
-func discoverPostgresBin() (string, error) {
-	if runtime.GOOS != "windows" {
-		return "", errors.New("unsupported OS")
-	}
-	candidates := []string{
-		filepath.Join(os.Getenv("ProgramFiles"), "PostgreSQL"),
-		filepath.Join(os.Getenv("ProgramFiles(x86)"), "PostgreSQL"),
-		`C:\Program Files\PostgreSQL`,
-	}
-	for _, base := range candidates {
-		if strings.TrimSpace(base) == "" || base == "PostgreSQL" {
-			continue
-		}
-		entries, err := os.ReadDir(base)
-		if err != nil {
-			continue
-		}
-		for _, e := range entries {
-			if !e.IsDir() {
-				continue
-			}
-			bin := filepath.Join(base, e.Name(), "bin")
-			psql := filepath.Join(bin, "psql.exe")
-			if _, err := os.Stat(psql); err == nil {
-				return bin, nil
-			}
-		}
-	}
-	return "", errors.New("PostgreSQL not found")
-}
-
-func discoverJatobaBin() (string, error) {
-	if runtime.GOOS != "windows" {
-		return "", errors.New("unsupported OS")
-	}
-	candidates := []string{
-		filepath.Join(os.Getenv("ProgramFiles"), "GIS", "Jatoba"),
-		filepath.Join(os.Getenv("ProgramFiles(x86)"), "GIS", "Jatoba"),
-		`C:\Program Files\GIS\Jatoba`,
-	}
-	for _, base := range candidates {
-		if strings.TrimSpace(base) == "" || base == "Jatoba" {
-			continue
-		}
-		entries, err := os.ReadDir(base)
-		if err != nil {
-			continue
-		}
-		for _, e := range entries {
-			if !e.IsDir() {
-				continue
-			}
-			bin := filepath.Join(base, e.Name(), "bin")
-			psql := filepath.Join(bin, "psql.exe")
-			if _, err := os.Stat(psql); err == nil {
-				return bin, nil
-			}
-		}
-	}
-	return "", errors.New("Jatoba not found")
 }
 
 func pqIdent(s string) string {

@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"syscall"
 
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
@@ -311,26 +310,25 @@ func findPostgresInstallerUnder(root string) string {
 func (a *App) LaunchClient(installDir string) error {
 	installDir = strings.TrimSpace(installDir)
 	if installDir == "" {
-		installDir = `C:\Program Files\Cyberstab`
+		if isWindows() {
+			installDir = `C:\Program Files\Cyberstab`
+		} else {
+			installDir = "/opt/cyberstab"
+		}
 	}
-	// Detect client dir based on architecture
-	clientDir := installer.DetectClientDirWindows(installDir)
+	clientDir := installer.DetectClientDir(installDir)
 	if clientDir == "" {
 		return fmt.Errorf("client directory not found")
 	}
 
-	// Find client exe
 	clientExe := installer.FindClientExeBestEffort(clientDir)
 	if clientExe == "" {
 		return fmt.Errorf("client executable not found")
 	}
 
-	// Launch client with proper working directory
 	cmd := exec.Command(clientExe)
 	cmd.Dir = filepath.Dir(clientExe)
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		HideWindow: false, // Show the window for client
-	}
+	hideCmdWindow(cmd, true)
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start client: %w", err)

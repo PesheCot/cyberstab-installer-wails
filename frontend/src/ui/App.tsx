@@ -204,6 +204,7 @@ export const App: React.FC = () => {
       const i: AppInfo = await window.go.main.App.GetAppInfo();
       setInfo(i);
       if (i.os === "windows") setInstallDir("C:\\Program Files\\Cyberstab");
+      if (i.os === "linux") setInstallDir("/opt/cyberstab");
 
       // Auto-detect distro on start (USB/root scan) and prefill if found.
       try {
