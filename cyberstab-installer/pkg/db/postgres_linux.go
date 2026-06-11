@@ -105,7 +105,12 @@ func StartPostgresServiceBestEffort() {
 
 // runPSQLAsLocalSuperuser connects via peer/trust as the postgres OS user.
 func runPSQLAsLocalSuperuser(dbName, sql string) (string, error) {
-	return runPSQLSuperuserMulti(dbName, sql)
+	return runPSQLSuperuserPeerOnly(dbName, sql)
+}
+
+// runPSQLSuperuserPeerOnly uses the default Unix socket (peer auth) without interactive prompts.
+func runPSQLSuperuserPeerOnly(dbName, sql string) (string, error) {
+	return runPSQLAsPostgresOS(dbName, sql, "socket")
 }
 
 func runPSQLSuperuserMulti(dbName, sql string) (string, error) {
@@ -129,7 +134,8 @@ func runPSQLAsPostgresOS(dbName, sql, mode string) (string, error) {
 		return "", fmt.Errorf("PostgreSQL not found")
 	}
 	psql := filepath.Join(info.BinDir, "psql")
-	psqlArgs := []string{"-d", dbName, "-t", "-A", "-c", sql}
+	// -w: never prompt on tty (password reset runs while user already typed the new password in CLI).
+	psqlArgs := []string{"-w", "-d", dbName, "-t", "-A", "-c", sql}
 	switch mode {
 	case "tcp":
 		psqlArgs = append([]string{"-h", "127.0.0.1"}, psqlArgs...)
@@ -157,6 +163,7 @@ func runPSQLAsPostgresOS(dbName, sql, mode string) (string, error) {
 	}
 
 	cmd.Env = append(os.Environ(), "PGCONNECT_TIMEOUT=8")
+	cmd.Stdin = nil
 	hideCmd(cmd)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

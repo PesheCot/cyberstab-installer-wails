@@ -42,7 +42,7 @@ func setUserPasswordPlatform(username, newPassword string) error {
 }
 
 func setUserPasswordWithHbaPatch(sql string) error {
-	if _, err := runPSQLSuperuserMulti("postgres", sql); err == nil {
+	if _, err := runPSQLSuperuserPeerOnly("postgres", sql); err == nil {
 		return nil
 	} else if !isPostgresAuthError(err) {
 		return err
@@ -50,7 +50,7 @@ func setUserPasswordWithHbaPatch(sql string) error {
 
 	log.Printf("[DB] auth failed, temporarily relaxing pg_hba.conf (local→peer, localhost→trust)")
 	return withTemporaryHbaAuthRelax(func() error {
-		_, runErr := runPSQLSuperuserMulti("postgres", sql)
+		_, runErr := runPSQLSuperuserPeerOnly("postgres", sql)
 		return runErr
 	})
 }

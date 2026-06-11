@@ -37,7 +37,7 @@ var (
 			Foreground(lipgloss.Color("#3A4A5C"))
 )
 
-const cliBuildTag = "2026-06-11-pgpro-detect"
+const cliBuildTag = "2026-06-11-no-psql-prompt"
 
 func printCLIBanner(title, subtitle string) {
 	fmt.Println()

@@ -529,8 +529,12 @@ func runPSQLAuth(user, password, dbName, sql string) (string, error) {
 	defer cancel()
 
 	args := []string{"-U", user, "-d", dbName, "-t", "-A", "-c", sql}
+	if strings.TrimSpace(password) == "" {
+		args = append([]string{"-w"}, args...)
+	}
 	cmd := exec.CommandContext(ctx, psql, args...)
 	hideCmd(cmd)
+	cmd.Stdin = nil
 	cmd.Env = append(os.Environ(), "PGCONNECT_TIMEOUT=5")
 	if password != "" {
 		cmd.Env = append(cmd.Env, "PGPASSWORD="+password)
