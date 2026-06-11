@@ -62,6 +62,12 @@ func isPostgresAuthError(err error) bool {
 	lower := strings.ToLower(err.Error())
 	return strings.Contains(lower, "authentication failed") ||
 		strings.Contains(lower, "password authentication") ||
+		strings.Contains(lower, "no password supplied") ||
+		strings.Contains(lower, "fe_sendauth") ||
+		strings.Contains(lower, "password required") ||
+		strings.Contains(lower, "requires a password") ||
+		strings.Contains(lower, "пароль не указан") ||
+		strings.Contains(lower, "не указан пароль") ||
 		strings.Contains(lower, "проверку подлинности") ||
 		strings.Contains(lower, "проверка подлинности") ||
 		strings.Contains(lower, "peer-доступ") ||

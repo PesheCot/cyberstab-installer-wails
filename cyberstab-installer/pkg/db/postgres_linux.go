@@ -108,9 +108,23 @@ func runPSQLAsLocalSuperuser(dbName, sql string) (string, error) {
 	return runPSQLSuperuserPeerOnly(dbName, sql)
 }
 
-// runPSQLSuperuserPeerOnly uses the default Unix socket (peer auth) without interactive prompts.
+// runPSQLSuperuserPeerOnly uses Unix socket (peer auth) without interactive prompts.
 func runPSQLSuperuserPeerOnly(dbName, sql string) (string, error) {
-	return runPSQLAsPostgresOS(dbName, sql, "socket")
+	var lastErr error
+	for _, mode := range []string{"socket", "tmp-socket"} {
+		out, err := runPSQLAsPostgresOS(dbName, sql, mode)
+		if err == nil {
+			return out, nil
+		}
+		lastErr = err
+		if !isPostgresAuthError(err) {
+			return "", err
+		}
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("не удалось подключиться к PostgreSQL")
+	}
+	return "", lastErr
 }
 
 func runPSQLSuperuserMulti(dbName, sql string) (string, error) {
