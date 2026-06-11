@@ -93,18 +93,31 @@ func (a *App) runInstall(opts StartInstallOptions, cb InstallCallbacks) error {
 		}
 	}
 
+	lastInstallLogPct := -1
 	e.ProgressEmitter = func(pct int, status string) {
 		steps := serializeEngineSteps(e.Steps)
 		if cb.OnProgress != nil {
 			cb.OnProgress(pct, status, steps)
 		}
-		log.Printf("[INSTALL] %d%% - %s", pct, status)
+		// CLI draws an in-place progress bar; avoid stdout log spam.
+		if cb.OnProgress == nil {
+			log.Printf("[INSTALL] %d%% - %s", pct, status)
+		} else if pct >= 100 && pct != lastInstallLogPct {
+			log.Printf("[INSTALL] %d%% - %s", pct, status)
+			lastInstallLogPct = pct
+		}
 	}
+	lastDeployLogPct := -1
 	e.DeployProgressEmitter = func(pct int, status string) {
 		if cb.OnDeploy != nil {
 			cb.OnDeploy(pct, status)
 		}
-		log.Printf("[DEPLOY] %d%% - %s", pct, status)
+		if cb.OnDeploy == nil {
+			log.Printf("[DEPLOY] %d%% - %s", pct, status)
+		} else if pct >= 100 && pct != lastDeployLogPct {
+			log.Printf("[DEPLOY] %d%% - %s", pct, status)
+			lastDeployLogPct = pct
+		}
 	}
 	e.SetUpdateHandler(emitSteps)
 

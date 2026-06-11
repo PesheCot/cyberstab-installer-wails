@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"golang.org/x/term"
 )
 
 var (
@@ -37,7 +38,7 @@ var (
 			Foreground(lipgloss.Color("#3A4A5C"))
 )
 
-const cliBuildTag = "2026-06-11-exec-tab"
+const cliBuildTag = "2026-06-11-progress-inline"
 
 func printCLIBanner(title, subtitle string) {
 	fmt.Println()
@@ -93,9 +94,18 @@ func cliProgressBar(pct int, label string) {
 	bar := cliProgressFill.Render(strings.Repeat("█", filled)) +
 		cliProgressEmpty.Render(strings.Repeat("░", cliProgressWidth-filled))
 	line := fmt.Sprintf("  %s %3d%%  %s", bar, pct, label)
-	fmt.Fprintf(os.Stdout, "\r%s", line)
+
+	width, _, _ := term.GetSize(int(os.Stderr.Fd()))
+	if width <= 0 {
+		width = 100
+	}
+	if pad := width - lipgloss.Width(line) - 1; pad > 0 {
+		line += strings.Repeat(" ", pad)
+	}
+
+	fmt.Fprint(os.Stderr, "\r\033[K"+line)
 	if pct >= 100 {
-		fmt.Println()
+		fmt.Fprintln(os.Stderr)
 	}
 }
 

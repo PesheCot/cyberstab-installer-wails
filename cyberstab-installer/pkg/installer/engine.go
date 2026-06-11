@@ -349,6 +349,7 @@ func (e *Engine) run() error {
 			st.total += dirSizeBestEffort(srcDir)
 		}
 
+		lastReportPct := -1
 		report := func() {
 			if e.DeployProgressEmitter == nil || st.total <= 0 {
 				return
@@ -357,6 +358,10 @@ func (e *Engine) run() error {
 			if pct > 100 {
 				pct = 100
 			}
+			if pct == lastReportPct {
+				return
+			}
+			lastReportPct = pct
 			e.DeployProgressEmitter(pct, "Копирование…")
 		}
 		report()
