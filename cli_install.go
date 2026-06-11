@@ -67,7 +67,7 @@ func runCLIInstall(app *App) error {
 
 	installDir := defaultInstallDir()
 	if isWindows() {
-		v, err := promptInput("Папка установки", installDir, installDir)
+		v, err := promptPathInputOrFallback("Папка установки", installDir, installDir)
 		if err != nil {
 			return err
 		}
@@ -95,7 +95,7 @@ func runCLIInstall(app *App) error {
 		}
 	}
 	if sourceRoot == "" {
-		sourceRoot, err = promptInput("Путь к папке с CyberstabServer*/CyberstabClient*", "", "")
+		sourceRoot, err = promptPathInputOrFallback("Путь к папке с CyberstabServer*/CyberstabClient*", "", "")
 		if err != nil {
 			return err
 		}
@@ -118,7 +118,7 @@ func runCLIInstall(app *App) error {
 		}
 		dbAction = action
 		if action == "restore" {
-			restoreSQL, err = promptInput("Путь к файлу .sql", "", "")
+			restoreSQL, err = promptPathInputOrFallback("Путь к файлу .sql", "", "")
 			if err != nil {
 				return err
 			}

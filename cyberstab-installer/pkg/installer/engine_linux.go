@@ -61,6 +61,9 @@ func finishInstallLinux(e *Engine) error {
 		return nil
 	}
 
+	if err := ensureExecutable(serverPath); err != nil {
+		return fmt.Errorf("сервер не исполняемый: %w", err)
+	}
 	if err := ensureServerAutostartLinux(e.InstallDir, serverPath); err != nil {
 		if e.ProgressEmitter != nil {
 			e.ProgressEmitter(92, "Автозапуск: "+err.Error())
@@ -101,6 +104,7 @@ func findServerExecutableLinux(installDir string) string {
 	}
 	for _, c := range candidates {
 		if st, err := os.Stat(c); err == nil && !st.IsDir() {
+			_ = ensureExecutable(c)
 			return c
 		}
 	}

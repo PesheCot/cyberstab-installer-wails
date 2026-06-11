@@ -37,7 +37,7 @@ var (
 			Foreground(lipgloss.Color("#3A4A5C"))
 )
 
-const cliBuildTag = "2026-06-11-hba-auth-fix"
+const cliBuildTag = "2026-06-11-exec-tab"
 
 func printCLIBanner(title, subtitle string) {
 	fmt.Println()

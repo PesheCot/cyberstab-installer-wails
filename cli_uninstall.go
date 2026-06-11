@@ -19,7 +19,7 @@ func runCLIUninstall(app *App) error {
 
 	installDir := defaultInstallDir()
 	if isWindows() {
-		v, err := promptInput("Папка установки", installDir, installDir)
+		v, err := promptPathInputOrFallback("Папка установки", installDir, installDir)
 		if err != nil {
 			return err
 		}

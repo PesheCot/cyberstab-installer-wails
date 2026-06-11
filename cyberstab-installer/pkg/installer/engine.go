@@ -375,9 +375,14 @@ func (e *Engine) run() error {
 			e.DeployProgressEmitter(100, "Готово")
 		}
 
-		// Set permissions for client folder IMMEDIATELY after copying
-		if runtime.GOOS == "linux" && e.Options.Components.InstallClients {
-			_ = setClientFolderPermissionsLinux(dst)
+		// Linux: ensure binaries are executable (USB/FAT often drops +x).
+		if runtime.GOOS == "linux" {
+			if err := ensureInstallExecutablesLinux(dst); err != nil {
+				log.Printf("[INSTALL] WARN: ensure executables: %v", err)
+			}
+			if e.Options.Components.InstallClients {
+				_ = setClientFolderPermissionsLinux(dst)
+			}
 		}
 		if runtime.GOOS == "windows" && e.Options.Components.InstallClients {
 			log.Printf("[INSTALL] Step 3.1: Setting client folder permissions...")
@@ -730,7 +735,11 @@ func copyDirBestEffort(src, dst string, onBytes func(delta int64)) error {
 				return nil
 			}
 		}
-		if err := os.WriteFile(target, b, info.Mode()); err != nil {
+		mode := info.Mode()
+		if runtime.GOOS == "linux" && (isELFBytes(b) || looksLikeInstallBinary(d.Name())) {
+			mode = mode | 0755
+		}
+		if err := os.WriteFile(target, b, mode); err != nil {
 			// If write fails (file locked), skip and continue
 			return nil
 		}
@@ -886,6 +895,11 @@ func runDbUpdaterOnce(exePath string, installDir string, args []string, pgUser, 
 	// dbupdater requires server.properties in its working directory.
 	if err := ensureDbUpdaterServerProperties(installDir, cmd.Dir); err != nil {
 		return err
+	}
+	if runtime.GOOS == "linux" {
+		if err := ensureExecutable(exePath); err != nil {
+			return fmt.Errorf("dbupdater: не удалось сделать исполняемым %s: %w", exePath, err)
+		}
 	}
 
 	if err := cmd.Start(); err != nil {
