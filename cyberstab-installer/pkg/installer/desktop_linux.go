@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -30,23 +32,27 @@ func createClientDesktopEntryLinux(installDir string) error {
 
 	if os.Geteuid() == 0 {
 		systemPath := "/usr/share/applications/cyberstab-client.desktop"
-		if err := writeDesktopEntry(systemPath, content, 0644); err != nil {
+		if err := writeDesktopEntry(systemPath, content, 0644, ""); err != nil {
 			log.Printf("[INSTALL] WARN: system menu entry: %v", err)
 		} else {
 			log.Printf("[INSTALL] Client menu entry: %s", systemPath)
+			_ = runLinuxCmd("update-desktop-database", "/usr/share/applications")
 		}
 	}
 
 	var wrote bool
 	for _, home := range linuxShortcutUserHomes() {
+		owner := linuxHomeOwner(home)
 		for _, desktopDir := range linuxDesktopDirs(home) {
-			entryPath := filepath.Join(desktopDir, "Киберстаб.desktop")
-			if err := writeDesktopEntry(entryPath, content, 0755); err != nil {
-				log.Printf("[INSTALL] WARN: desktop icon %s: %v", entryPath, err)
-				continue
+			for _, name := range []string{"Киберстаб.desktop", "cyberstab-client.desktop"} {
+				entryPath := filepath.Join(desktopDir, name)
+				if err := writeDesktopEntry(entryPath, content, 0755, owner); err != nil {
+					log.Printf("[INSTALL] WARN: desktop icon %s: %v", entryPath, err)
+					continue
+				}
+				log.Printf("[INSTALL] Client desktop icon: %s", entryPath)
+				wrote = true
 			}
-			log.Printf("[INSTALL] Client desktop icon: %s", entryPath)
-			wrote = true
 		}
 	}
 	if !wrote {
@@ -55,9 +61,23 @@ func createClientDesktopEntryLinux(installDir string) error {
 	return nil
 }
 
+func linuxHomeOwner(home string) string {
+	home = filepath.Clean(home)
+	if sudoUser := strings.TrimSpace(os.Getenv("SUDO_USER")); sudoUser != "" && sudoUser != "root" {
+		if u, err := user.Lookup(sudoUser); err == nil && filepath.Clean(u.HomeDir) == home {
+			return sudoUser
+		}
+	}
+	if u, err := user.Current(); err == nil && filepath.Clean(u.HomeDir) == home {
+		return u.Username
+	}
+	return ""
+}
+
 func linuxShortcutUserHomes() []string {
 	var homes []string
 	seen := map[string]bool{}
+	sudoUser := strings.TrimSpace(os.Getenv("SUDO_USER"))
 
 	add := func(h string) {
 		h = strings.TrimSpace(h)
@@ -71,16 +91,20 @@ func linuxShortcutUserHomes() []string {
 		homes = append(homes, h)
 	}
 
-	if sudoUser := strings.TrimSpace(os.Getenv("SUDO_USER")); sudoUser != "" && sudoUser != "root" {
+	if sudoUser != "" && sudoUser != "root" {
 		if u, err := user.Lookup(sudoUser); err == nil {
 			add(u.HomeDir)
 		}
 	}
 	if u, err := user.Current(); err == nil {
-		add(u.HomeDir)
+		if sudoUser == "" || u.Username != "root" {
+			add(u.HomeDir)
+		}
 	}
 	if h, err := os.UserHomeDir(); err == nil {
-		add(h)
+		if sudoUser == "" || h != "/root" {
+			add(h)
+		}
 	}
 	return homes
 }
@@ -156,16 +180,61 @@ func buildClientDesktopEntry(execPath, workDir, icon string) string {
 	return b.String()
 }
 
-func writeDesktopEntry(path, content string, mode os.FileMode) error {
+func writeDesktopEntry(path, content string, mode os.FileMode, ownerUser string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
 	if err := os.WriteFile(path, []byte(content), mode); err != nil {
 		return err
 	}
-	// Fly DE / Astra: .desktop on the desktop must be executable to launch.
 	if strings.HasSuffix(strings.ToLower(path), ".desktop") {
 		_ = os.Chmod(path, 0755)
 	}
+	chownDesktopEntry(path, ownerUser)
+	markDesktopEntryTrusted(path, ownerUser)
 	return nil
+}
+
+func chownDesktopEntry(path, ownerUser string) {
+	if os.Geteuid() != 0 {
+		return
+	}
+	ownerUser = strings.TrimSpace(ownerUser)
+	if ownerUser == "" {
+		ownerUser = strings.TrimSpace(os.Getenv("SUDO_USER"))
+	}
+	if ownerUser == "" || ownerUser == "root" {
+		return
+	}
+	u, err := user.Lookup(ownerUser)
+	if err != nil {
+		return
+	}
+	uid, err1 := strconv.Atoi(u.Uid)
+	gid, err2 := strconv.Atoi(u.Gid)
+	if err1 != nil || err2 != nil {
+		return
+	}
+	if err := os.Chown(path, uid, gid); err != nil {
+		log.Printf("[INSTALL] WARN: chown %s to %s: %v", path, ownerUser, err)
+	}
+}
+
+func markDesktopEntryTrusted(path, ownerUser string) {
+	// Fly DE / Astra: untrusted .desktop files on the desktop are hidden until marked trusted.
+	gio, err := exec.LookPath("gio")
+	if err != nil {
+		return
+	}
+	ownerUser = strings.TrimSpace(ownerUser)
+	if ownerUser == "" {
+		ownerUser = strings.TrimSpace(os.Getenv("SUDO_USER"))
+	}
+	var cmd *exec.Cmd
+	if ownerUser != "" && ownerUser != "root" && os.Geteuid() == 0 {
+		cmd = exec.Command("runuser", "-u", ownerUser, "--", gio, "set", path, "metadata::trusted", "true")
+	} else {
+		cmd = exec.Command(gio, "set", path, "metadata::trusted", "true")
+	}
+	_ = cmd.Run()
 }

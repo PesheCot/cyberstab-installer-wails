@@ -358,8 +358,18 @@ func DropOkidociDB(user, password string) error {
 
 	time.Sleep(1 * time.Second)
 
-	// Step 3: Drop specific roles in order
-	log.Printf("[DROP] Step 3: Dropping roles...")
+	// Step 3: Drop database first — roles own objects inside okidoci_db and cannot be
+	// dropped until the database (and its objects) is removed.
+	log.Printf("[DROP] Step 3: Dropping database...")
+	if err := runPsql("postgres", "DROP DATABASE IF EXISTS okidoci_db;"); err != nil {
+		return fmt.Errorf("failed to drop okidoci_db: %w", err)
+	}
+	log.Printf("[DROP] okidoci_db dropped successfully")
+
+	time.Sleep(500 * time.Millisecond)
+
+	// Step 4: Drop roles after database is gone.
+	log.Printf("[DROP] Step 4: Dropping roles...")
 	roles := []string{"okidoci_admin", "okidoci_service_user_name", "okidoci_users"}
 	for _, role := range roles {
 		sql := fmt.Sprintf("DROP ROLE IF EXISTS %s;", role)
@@ -368,25 +378,14 @@ func DropOkidociDB(user, password string) error {
 		}
 	}
 
-	// Drop remaining okidoci_* roles
 	if err := runPsql("postgres", "DO $$ DECLARE r record; BEGIN FOR r IN SELECT rolname FROM pg_roles WHERE rolname LIKE 'okidoci_%' LOOP BEGIN EXECUTE format('DROP ROLE IF EXISTS %I', r.rolname); EXCEPTION WHEN others THEN NULL; END; END LOOP; END $$;"); err != nil {
 		log.Printf("[DROP] Warning: Failed to drop remaining okidoci_* roles: %v", err)
 	}
 
-	// Drop oki_* roles
 	if err := runPsql("postgres", "DO $$ DECLARE r record; BEGIN FOR r IN SELECT rolname FROM pg_roles WHERE rolname LIKE 'oki_%' LOOP BEGIN EXECUTE format('DROP ROLE IF EXISTS %I', r.rolname); EXCEPTION WHEN others THEN NULL; END; END LOOP; END $$;"); err != nil {
 		log.Printf("[DROP] Warning: Failed to drop oki_* roles: %v", err)
 	}
 
-	time.Sleep(500 * time.Millisecond)
-
-	// Step 4: Drop the database
-	log.Printf("[DROP] Step 4: Dropping database...")
-	if err := runPsql("postgres", "DROP DATABASE IF EXISTS okidoci_db;"); err != nil {
-		return fmt.Errorf("failed to drop okidoci_db: %w", err)
-	}
-
-	log.Printf("[DROP] okidoci_db dropped successfully")
 	return nil
 }
 

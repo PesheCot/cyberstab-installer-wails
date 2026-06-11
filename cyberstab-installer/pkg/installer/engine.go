@@ -402,8 +402,11 @@ func (e *Engine) run() error {
 				log.Printf("[INSTALL] Client permissions set successfully")
 			}
 			flushLog()
-		} else {
-			log.Printf("[INSTALL] Step 3.1: SKIPPED - InstallClients = %v", e.Options.Components.InstallClients)
+		} else if runtime.GOOS == "linux" && e.Options.Components.InstallClients {
+			log.Printf("[INSTALL] Step 3.1: Linux client permissions configured")
+			flushLog()
+		} else if !e.Options.Components.InstallClients {
+			log.Printf("[INSTALL] Step 3.1: SKIPPED - InstallClients = false")
 			flushLog()
 		}
 
