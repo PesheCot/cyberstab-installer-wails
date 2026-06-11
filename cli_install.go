@@ -4,7 +4,6 @@ package main
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/charmbracelet/huh"
 )
@@ -23,43 +22,19 @@ func runCLIInstall(app *App) error {
 	cliSummaryLine("Компоненты", componentModeLabel(installServer, installClients, installDB))
 
 	needsPG := installServer || installDB
+	wantServerOrDB := installServer || installDB
+
+	sourceRoot, err := promptDistroSourceRoot(app, wantServerOrDB, installClients)
+	if err != nil {
+		return err
+	}
+
 	dbEngine := ""
 	pgUser := "postgres"
 	pgPass := ""
 
 	if needsPG {
-		printCLISection("PostgreSQL / СУБД")
-		result, err := app.CheckDbInstalled()
-		if err != nil {
-			return err
-		}
-		if !result.Installed {
-			return fmt.Errorf("СУБД не найдена — установите PostgreSQL и повторите")
-		}
-		engines := result.Engines
-		if len(engines) > 1 {
-			opts := make([]huh.Option[string], len(engines))
-			for i, e := range engines {
-				opts[i] = huh.NewOption(fmt.Sprintf("%s (%s)", e.Label, e.BinDir), e.BinDir)
-			}
-			binDir, err := promptSelect("Выберите движок СУБД", opts, engines[0].BinDir)
-			if err != nil {
-				return err
-			}
-			_ = app.SelectDbEngineBin(binDir)
-			for _, e := range engines {
-				if e.BinDir == binDir {
-					dbEngine = e.Kind
-					break
-				}
-			}
-		} else if len(engines) == 1 {
-			dbEngine = engines[0].Kind
-			cliSummaryLine("СУБД", engines[0].Label)
-			_ = app.SelectDbEngineBin(engines[0].BinDir)
-		}
-
-		pgUser, pgPass, err = promptPostgresCredentials(app)
+		dbEngine, pgUser, pgPass, err = promptDatabaseSetup(app, sourceRoot)
 		if err != nil {
 			return err
 		}
@@ -79,31 +54,6 @@ func runCLIInstall(app *App) error {
 		cliSummaryLine("Путь", installDir)
 	}
 
-	printCLISection("Дистрибутив")
-	sourceRoot, err := app.AutoDetectSourceRoot(installServer || installDB, installClients)
-	if err != nil {
-		return err
-	}
-	if sourceRoot != "" {
-		cliSummaryLine("Найден", sourceRoot)
-		use, err := promptConfirm("Использовать этот путь?", true)
-		if err != nil {
-			return err
-		}
-		if !use {
-			sourceRoot = ""
-		}
-	}
-	if sourceRoot == "" {
-		sourceRoot, err = promptPathInputOrFallback("Путь к папке с CyberstabServer*/CyberstabClient*", "", "")
-		if err != nil {
-			return err
-		}
-		if strings.TrimSpace(sourceRoot) == "" {
-			return fmt.Errorf("укажите путь к дистрибутиву")
-		}
-	}
-
 	dbAction := ""
 	restoreSQL := ""
 	if needsPG {
@@ -118,12 +68,23 @@ func runCLIInstall(app *App) error {
 		}
 		dbAction = action
 		if action == "restore" {
-			restoreSQL, err = promptPathInputOrFallback("Путь к файлу .sql", "", "")
-			if err != nil {
-				return err
-			}
-			if strings.TrimSpace(restoreSQL) == "" {
-				return fmt.Errorf("укажите путь к .sql")
+			for {
+				restoreSQL, err = promptPathInputOrFallback("Путь к файлу .sql", "", "")
+				if err != nil {
+					return err
+				}
+				if err := app.ValidateSqlBackupPath(restoreSQL); err != nil {
+					cliError(err.Error())
+					retry, rerr := promptConfirm("Указать другой файл?", true)
+					if rerr != nil {
+						return rerr
+					}
+					if !retry {
+						return err
+					}
+					continue
+				}
+				break
 			}
 		}
 	}

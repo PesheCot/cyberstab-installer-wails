@@ -40,6 +40,15 @@ func validateInstallOptions(opts StartInstallOptions) error {
 	if strings.TrimSpace(opts.DbAction) == "restore" && strings.TrimSpace(opts.RestoreSqlPath) == "" {
 		return fmt.Errorf("укажите путь к файлу .sql для восстановления базы")
 	}
+	if missing, err := installer.ValidateDistroRoot(
+		opts.SourceRoot,
+		opts.InstallServer || opts.InstallDB,
+		opts.InstallClients,
+	); err != nil {
+		return err
+	} else if len(missing) > 0 {
+		return fmt.Errorf("в %s не найдены папки дистрибутива: %s", opts.SourceRoot, strings.Join(missing, ", "))
+	}
 	return nil
 }
 
