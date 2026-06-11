@@ -8,8 +8,13 @@ import (
 )
 
 func isLikelyExecutable(path string, d os.DirEntry) bool {
-	_ = path
 	if strings.HasSuffix(strings.ToLower(d.Name()), ".exe") {
+		return true
+	}
+	if looksLikeInstallBinary(d.Name()) {
+		return true
+	}
+	if isELF(path) {
 		return true
 	}
 	info, err := d.Info()

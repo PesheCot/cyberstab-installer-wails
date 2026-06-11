@@ -31,7 +31,9 @@ func (m pathInputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.done = true
 			return m, tea.Quit
 		case tea.KeyTab:
-			m.input.SetValue(completePath(m.input.Value()))
+			completed := completePath(m.input.Value())
+			m.input.SetValue(completed)
+			m.input.CursorEnd()
 			return m, nil
 		}
 	}

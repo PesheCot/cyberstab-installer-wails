@@ -42,7 +42,9 @@ func finishInstallLinux(e *Engine) error {
 
 	if e.Options.Components.InstallClients {
 		_ = setClientFolderPermissionsLinux(e.InstallDir)
-		_ = createClientDesktopEntryLinux(e.InstallDir)
+		if err := createClientDesktopEntryLinux(e.InstallDir); err != nil {
+			log.Printf("[INSTALL] WARN: client shortcut: %v", err)
+		}
 	}
 
 	if !(e.Options.Components.InstallServer || e.Options.Components.InstallDB) {
@@ -224,11 +226,17 @@ func stopCyberstabProcessesLinux() error {
 }
 
 func setClientFolderPermissionsLinux(installDir string) error {
+	installDir = filepath.Clean(installDir)
+	if st, err := os.Stat(installDir); err == nil && st.IsDir() {
+		_ = os.Chmod(installDir, st.Mode()|0755)
+	}
+
 	var dirs []string
-	for _, name := range []string{"CyberstabClientLinux64", "CyberstabClientLinux32"} {
+	for _, name := range []string{"CyberstabClientLinux64", "CyberstabClientLinux32", "CyberstabServerLinux"} {
 		p := filepath.Join(installDir, name)
 		if st, err := os.Stat(p); err == nil && st.IsDir() {
 			dirs = append(dirs, p)
+			_ = os.Chmod(p, st.Mode()|0755)
 		}
 	}
 	if len(dirs) == 0 {
@@ -238,37 +246,6 @@ func setClientFolderPermissionsLinux(installDir string) error {
 	}
 	for _, dir := range dirs {
 		_ = runLinuxCmd("chmod", "-R", "a+rx", dir)
-	}
-	return nil
-}
-
-func createClientDesktopEntryLinux(installDir string) error {
-	clientDir := DetectClientDirLinux(installDir)
-	if clientDir == "" {
-		return fmt.Errorf("client directory not found")
-	}
-	targetExe := FindClientExeBestEffort(clientDir)
-	if targetExe == "" {
-		return fmt.Errorf("client executable not found in %s", clientDir)
-	}
-	desktopDir := filepath.Join(os.Getenv("HOME"), "Desktop")
-	if xdg := strings.TrimSpace(os.Getenv("XDG_DESKTOP_DIR")); xdg != "" {
-		desktopDir = xdg
-	}
-	if err := os.MkdirAll(desktopDir, 0755); err != nil {
-		return err
-	}
-	entryPath := filepath.Join(desktopDir, "cyberstab-client.desktop")
-	content := fmt.Sprintf(`[Desktop Entry]
-Type=Application
-Name=Киберстаб
-Comment=Киберстаб Клиент
-Exec=%s
-Path=%s
-Terminal=false
-`, targetExe, filepath.Dir(targetExe))
-	if err := os.WriteFile(entryPath, []byte(content), 0755); err != nil {
-		return err
 	}
 	return nil
 }
