@@ -26,8 +26,9 @@ type PostgresInfo struct {
 type EngineKind string
 
 const (
-	EnginePostgreSQL EngineKind = "postgresql"
-	EngineJatoba     EngineKind = "jatoba"
+	EnginePostgreSQL  EngineKind = "postgresql"
+	EnginePostgresPro EngineKind = "postgrespro"
+	EngineJatoba      EngineKind = "jatoba"
 )
 
 type EngineInfo struct {
@@ -35,6 +36,7 @@ type EngineInfo struct {
 	DisplayName string
 	BinDir      string
 	RootDir     string
+	Version     string
 }
 
 var postgresBinDir string
@@ -46,34 +48,77 @@ func SetPostgresBinDir(dir string) {
 		activeEngine = EngineInfo{}
 		return
 	}
-	kind := detectEngineKindByPath(postgresBinDir)
-	activeEngine = EngineInfo{
-		Kind:        kind,
-		DisplayName: engineDisplayName(kind),
-		BinDir:      postgresBinDir,
-		RootDir:     filepath.Dir(postgresBinDir),
-	}
+	activeEngine = buildEngineInfo(postgresBinDir)
 }
 
 func engineDisplayName(kind EngineKind) string {
-	if kind == EngineJatoba {
+	switch kind {
+	case EngineJatoba:
 		return "Jatoba"
+	case EnginePostgresPro:
+		return "Postgres Pro"
+	default:
+		return "PostgreSQL"
 	}
-	return "PostgreSQL"
 }
 
-func detectEngineKindByPath(binDir string) EngineKind {
-	p := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(binDir), "/", `\`))
-	if strings.Contains(p, `\gis\jatoba\`) || strings.Contains(p, `\jatoba\`) {
-		return EngineJatoba
+func buildEngineInfo(binDir string) EngineInfo {
+	binDir = strings.TrimSpace(binDir)
+	kind := detectEngineKindByPath(binDir)
+	version := detectEngineVersion(binDir)
+	return EngineInfo{
+		Kind:        kind,
+		DisplayName: formatEngineDisplayName(kind, version),
+		BinDir:      binDir,
+		RootDir:     filepath.Dir(binDir),
+		Version:     version,
 	}
-	return EnginePostgreSQL
+}
+
+func formatEngineDisplayName(kind EngineKind, version string) string {
+	name := engineDisplayName(kind)
+	if strings.TrimSpace(version) == "" {
+		return name
+	}
+	return name + " " + version
+}
+
+var psqlVersionRe = regexp.MustCompile(`(\d+(?:\.\d+)?)`)
+
+func detectEngineVersion(binDir string) string {
+	binDir = strings.TrimSpace(binDir)
+	if binDir == "" {
+		return ""
+	}
+	psql := filepath.Join(binDir, "psql")
+	if runtime.GOOS == "windows" {
+		psql += ".exe"
+	}
+	out, err := exec.Command(psql, "--version").Output()
+	if err != nil {
+		return versionFromPath(binDir)
+	}
+	text := strings.TrimSpace(string(out))
+	if m := psqlVersionRe.FindStringSubmatch(text); len(m) > 1 {
+		return m[1]
+	}
+	return versionFromPath(binDir)
+}
+
+func versionFromPath(binDir string) string {
+	parts := strings.Split(filepath.ToSlash(filepath.Clean(binDir)), "/")
+	for i := len(parts) - 1; i >= 0; i-- {
+		if psqlVersionRe.MatchString(parts[i]) {
+			return psqlVersionRe.FindString(parts[i])
+		}
+	}
+	return ""
 }
 
 func DiscoverEngines() ([]EngineInfo, error) {
 	var out []EngineInfo
 	seen := map[string]bool{}
-	add := func(kind EngineKind, binDir string) {
+	addBin := func(binDir string) {
 		binDir = strings.TrimSpace(binDir)
 		if binDir == "" {
 			return
@@ -83,21 +128,17 @@ func DiscoverEngines() ([]EngineInfo, error) {
 			return
 		}
 		seen[key] = true
-		out = append(out, EngineInfo{
-			Kind:        kind,
-			DisplayName: engineDisplayName(kind),
-			BinDir:      binDir,
-			RootDir:     filepath.Dir(binDir),
-		})
+		out = append(out, buildEngineInfo(binDir))
 	}
 	if bin, err := discoverPostgresBin(); err == nil {
-		add(EnginePostgreSQL, bin)
+		addBin(bin)
 	}
 	if bin, err := discoverJatobaBin(); err == nil {
-		add(EngineJatoba, bin)
+		addBin(bin)
 	}
+	discoverAdditionalEngines(addBin)
 	if strings.TrimSpace(postgresBinDir) != "" {
-		add(detectEngineKindByPath(postgresBinDir), postgresBinDir)
+		addBin(postgresBinDir)
 	}
 	return out, nil
 }
@@ -114,6 +155,25 @@ func SelectEngineByKind(kind EngineKind) (EngineInfo, error) {
 		}
 	}
 	return EngineInfo{}, fmt.Errorf("движок %s не найден", kind)
+}
+
+func SelectEngineByBinDir(binDir string) (EngineInfo, error) {
+	binDir = filepath.Clean(strings.TrimSpace(binDir))
+	if binDir == "" {
+		return EngineInfo{}, fmt.Errorf("пустой путь к bin СУБД")
+	}
+	engines, err := DiscoverEngines()
+	if err != nil {
+		return EngineInfo{}, err
+	}
+	for _, e := range engines {
+		if filepath.Clean(e.BinDir) == binDir {
+			SetPostgresBinDir(e.BinDir)
+			return e, nil
+		}
+	}
+	SetPostgresBinDir(binDir)
+	return buildEngineInfo(binDir), nil
 }
 
 func GetActiveEngine() EngineInfo {

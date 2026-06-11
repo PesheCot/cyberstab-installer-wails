@@ -86,6 +86,10 @@ export function SelectDbEngine(arg1) {
   return window['go']['main']['App']['SelectDbEngine'](arg1);
 }
 
+export function SelectDbEngineBin(arg1) {
+  return window['go']['main']['App']['SelectDbEngineBin'](arg1);
+}
+
 export function Shutdown(arg1) {
   return window['go']['main']['App']['Shutdown'](arg1);
 }

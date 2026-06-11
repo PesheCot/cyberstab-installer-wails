@@ -23,7 +23,6 @@ func discoverPostgresBin() (string, error) {
 	var candidates []string
 	for _, base := range []string{
 		"/usr/lib/postgresql",
-		"/usr/pgsql",
 		"/opt/postgresql",
 		"/usr/local/pgsql",
 	} {
@@ -88,10 +87,16 @@ func hasPsql(binDir string) bool {
 func StartPostgresServiceBestEffort() {
 	for _, unit := range []string{
 		"postgresql",
-		"postgresql@14-main",
-		"postgresql@15-main",
-		"postgresql@16-main",
+		"postgresql@18-main",
 		"postgresql@17-main",
+		"postgresql@16-main",
+		"postgresql@15-main",
+		"postgresql@14-main",
+		"pgpro-18",
+		"pgpro-17",
+		"pgpro-16",
+		"pgpro-15",
+		"postgrespro",
 	} {
 		cmd := exec.Command("systemctl", "start", unit)
 		_ = cmd.Run()

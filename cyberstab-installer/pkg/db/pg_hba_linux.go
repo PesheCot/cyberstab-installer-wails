@@ -22,7 +22,10 @@ var hbaPasswordMethods = map[string]struct{}{
 	"ident":         {},
 }
 
-var hbaPathRe = regexp.MustCompile(`/etc/postgresql/([^/]+)/([^/]+)/pg_hba\.conf`)
+var (
+	hbaPathDebianRe = regexp.MustCompile(`/etc/postgresql/([^/]+)/([^/]+)/pg_hba\.conf`)
+	hbaPathPgProRe  = regexp.MustCompile(`/var/lib/pgpro/([^/]+)(?:/([^/]+))?/data/pg_hba\.conf`)
+)
 
 func setUserPasswordPlatform(username, newPassword string) error {
 	sql := alterUserPasswordSQL(username, newPassword)
@@ -67,30 +70,209 @@ func isPostgresAuthError(err error) bool {
 }
 
 func findPgHbaConf() (string, error) {
+	engine := GetActiveEngine()
+	if p := findPgHbaNearEngine(engine); p != "" {
+		return p, nil
+	}
 	if p, err := findPgHbaViaClusters(); err == nil && p != "" {
 		return p, nil
 	}
-	var matches []string
-	for _, pattern := range []string{
-		"/etc/postgresql/*/main/pg_hba.conf",
-		"/etc/postgresql/*/pg_hba.conf",
-	} {
-		found, _ := filepath.Glob(pattern)
-		matches = append(matches, found...)
+	if p := findPgHbaViaSystemd(engine); p != "" {
+		return p, nil
 	}
-	sort.Strings(matches)
-	if len(matches) > 0 {
-		return matches[len(matches)-1], nil
+	candidates := collectHbaCandidates()
+	if p := pickBestHbaCandidate(candidates, engine); p != "" {
+		return p, nil
 	}
-	for _, p := range []string{
-		"/var/lib/postgresql/data/pg_hba.conf",
-		"/var/lib/pgsql/data/pg_hba.conf",
-	} {
-		if st, err := os.Stat(p); err == nil && !st.IsDir() {
-			return p, nil
+	label := engine.DisplayName
+	if label == "" {
+		label = "СУБД"
+	}
+	return "", fmt.Errorf("pg_hba.conf не найден для %s (bin: %s)", label, engine.BinDir)
+}
+
+func findPgHbaNearEngine(engine EngineInfo) string {
+	if strings.TrimSpace(engine.BinDir) == "" {
+		return ""
+	}
+	pgConfig := filepath.Join(engine.BinDir, "pg_config")
+	if st, err := os.Stat(pgConfig); err == nil && !st.IsDir() {
+		for _, flag := range []string{"--sysconfdir", "--sharedir"} {
+			out, err := exec.Command(pgConfig, flag).Output()
+			if err != nil {
+				continue
+			}
+			dir := strings.TrimSpace(string(out))
+			for _, cand := range []string{
+				filepath.Join(dir, "pg_hba.conf"),
+				filepath.Join(dir, "..", "data", "pg_hba.conf"),
+			} {
+				if fileExists(cand) {
+					return cand
+				}
+			}
 		}
 	}
-	return "", fmt.Errorf("pg_hba.conf не найден (проверьте /etc/postgresql/*/main/pg_hba.conf)")
+
+	root := filepath.Dir(engine.BinDir)
+	for _, rel := range []string{
+		"data/pg_hba.conf",
+		"../data/pg_hba.conf",
+	} {
+		if fileExists(filepath.Join(root, rel)) {
+			return filepath.Join(root, rel)
+		}
+	}
+
+	if engine.Version != "" {
+		for _, pattern := range []string{
+			filepath.Join("/var/lib/pgpro", "*", "data", "pg_hba.conf"),
+			filepath.Join("/var/lib/pgpro", engine.Version, "*", "data", "pg_hba.conf"),
+			filepath.Join("/var/lib/pgpro", "*", engine.Version, "data", "pg_hba.conf"),
+			filepath.Join("/opt/pgpro", "*", "data", "pg_hba.conf"),
+			filepath.Join("/opt/pgpro", "std-"+engine.Version, "data", "pg_hba.conf"),
+			filepath.Join("/opt/pgpro", "pgpro-"+engine.Version, "data", "pg_hba.conf"),
+		} {
+			for _, cand := range globFiles(pattern) {
+				if fileExists(cand) {
+					return cand
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func findPgHbaViaSystemd(engine EngineInfo) string {
+	units := systemdUnitsForEngine(engine)
+	for _, unit := range units {
+		if pgdata := pgDataFromSystemdUnit(unit); pgdata != "" {
+			hba := filepath.Join(pgdata, "pg_hba.conf")
+			if fileExists(hba) {
+				return hba
+			}
+		}
+	}
+	return ""
+}
+
+func systemdUnitsForEngine(engine EngineInfo) []string {
+	var units []string
+	if engine.Version != "" {
+		units = append(units,
+			fmt.Sprintf("pgpro-%s", engine.Version),
+			fmt.Sprintf("postgrespro-%s", engine.Version),
+			fmt.Sprintf("postgresql@%s-main", engine.Version),
+		)
+	}
+	switch engine.Kind {
+	case EnginePostgresPro:
+		units = append(units, "pgpro", "postgrespro")
+	case EnginePostgreSQL:
+		units = append(units, "postgresql")
+	}
+	units = append(units,
+		"pgpro-18", "pgpro-17", "pgpro-16", "pgpro-15", "pgpro-14",
+		"postgresql@18-main", "postgresql@17-main", "postgresql@16-main",
+	)
+	return uniqueNonEmpty(units)
+}
+
+func uniqueNonEmpty(in []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, s := range in {
+		s = strings.TrimSpace(s)
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	return out
+}
+
+func pgDataFromSystemdUnit(unit string) string {
+	out, err := exec.Command("systemctl", "show", unit, "-p", "Environment", "--value").Output()
+	if err == nil {
+		if pgdata := parsePGDATA(string(out)); pgdata != "" {
+			return pgdata
+		}
+	}
+	out, err = exec.Command("systemctl", "cat", unit).Output()
+	if err != nil {
+		return ""
+	}
+	return parsePGDATA(string(out))
+}
+
+var pgDataEnvRe = regexp.MustCompile(`(?m)(?:^|\s)PGDATA=(?:\"([^\"]+)\"|([^\s\"]+))`)
+
+func parsePGDATA(text string) string {
+	m := pgDataEnvRe.FindStringSubmatch(text)
+	if len(m) < 3 {
+		return ""
+	}
+	if m[1] != "" {
+		return m[1]
+	}
+	return m[2]
+}
+
+func collectHbaCandidates() []string {
+	patterns := []string{
+		"/etc/postgresql/*/main/pg_hba.conf",
+		"/etc/postgresql/*/pg_hba.conf",
+		"/var/lib/postgresql/*/main/pg_hba.conf",
+		"/var/lib/postgresql/*/data/pg_hba.conf",
+		"/var/lib/pgpro/*/data/pg_hba.conf",
+		"/var/lib/pgpro/*/*/data/pg_hba.conf",
+		"/opt/pgpro/*/data/pg_hba.conf",
+		"/opt/pgpro/*/*/data/pg_hba.conf",
+		"/opt/pgpro/std-*/data/pg_hba.conf",
+		"/opt/pgpro/pgpro-*/data/pg_hba.conf",
+		"/var/lib/pgsql/data/pg_hba.conf",
+		"/var/lib/pgsql/*/data/pg_hba.conf",
+	}
+	var out []string
+	for _, pattern := range patterns {
+		out = append(out, globFiles(pattern)...)
+	}
+	return uniqueStrings(out)
+}
+
+func pickBestHbaCandidate(candidates []string, engine EngineInfo) string {
+	if len(candidates) == 0 {
+		return ""
+	}
+	if engine.BinDir != "" {
+		binKey := strings.ToLower(filepath.ToSlash(filepath.Dir(engine.BinDir)))
+		for _, c := range candidates {
+			cl := strings.ToLower(filepath.ToSlash(c))
+			if strings.Contains(cl, binKey) {
+				return c
+			}
+		}
+	}
+	if engine.Version != "" {
+		for _, c := range candidates {
+			if strings.Contains(c, engine.Version) {
+				return c
+			}
+		}
+	}
+	sort.Strings(candidates)
+	return candidates[len(candidates)-1]
+}
+
+func globFiles(pattern string) []string {
+	found, _ := filepath.Glob(pattern)
+	return found
+}
+
+func fileExists(path string) bool {
+	st, err := os.Stat(path)
+	return err == nil && !st.IsDir()
 }
 
 func findPgHbaViaClusters() (string, error) {
@@ -109,7 +291,7 @@ func findPgHbaViaClusters() (string, error) {
 			continue
 		}
 		hba := filepath.Join("/etc/postgresql", fields[0], fields[1], "pg_hba.conf")
-		if st, statErr := os.Stat(hba); statErr == nil && !st.IsDir() {
+		if fileExists(hba) {
 			candidates = append(candidates, hba)
 		}
 	}
@@ -214,23 +396,43 @@ func reloadPostgresAggressive(hbaPath string) {
 	reloadPostgresFromHbaPath(hbaPath)
 	time.Sleep(800 * time.Millisecond)
 
-	if m := hbaPathRe.FindStringSubmatch(hbaPath); len(m) == 3 {
-		dataDir := filepath.Join("/var/lib/postgresql", m[1], m[2])
-		info, err := CheckPostgres()
-		if err == nil && info != nil && info.Installed {
-			pgCtl := filepath.Join(info.BinDir, "pg_ctl")
-			cmd := exec.Command("runuser", "-u", "postgres", "--", pgCtl, "reload", "-D", dataDir)
-			if err := cmd.Run(); err == nil {
-				log.Printf("[DB] pg_ctl reload -D %s", dataDir)
-				time.Sleep(400 * time.Millisecond)
-				return
-			}
+	dataDir := dataDirFromHbaPath(hbaPath)
+	if dataDir == "" {
+		return
+	}
+	info, err := CheckPostgres()
+	if err == nil && info != nil && info.Installed {
+		pgCtl := filepath.Join(info.BinDir, "pg_ctl")
+		cmd := exec.Command("runuser", "-u", "postgres", "--", pgCtl, "reload", "-D", dataDir)
+		if err := cmd.Run(); err == nil {
+			log.Printf("[DB] pg_ctl reload -D %s", dataDir)
+			time.Sleep(400 * time.Millisecond)
 		}
 	}
 }
 
+func dataDirFromHbaPath(hbaPath string) string {
+	if strings.HasSuffix(hbaPath, "/pg_hba.conf") {
+		dir := filepath.Dir(hbaPath)
+		if strings.HasSuffix(dir, "/data") || strings.HasSuffix(dir, `\data`) {
+			return dir
+		}
+	}
+	if m := hbaPathDebianRe.FindStringSubmatch(hbaPath); len(m) == 3 {
+		return filepath.Join("/var/lib/postgresql", m[1], m[2])
+	}
+	if m := hbaPathPgProRe.FindStringSubmatch(hbaPath); len(m) >= 2 {
+		if len(m) >= 3 && m[2] != "" {
+			return filepath.Join("/var/lib/pgpro", m[1], m[2], "data")
+		}
+		return filepath.Join("/var/lib/pgpro", m[1], "data")
+	}
+	return ""
+}
+
 func reloadPostgresFromHbaPath(hbaPath string) {
-	if m := hbaPathRe.FindStringSubmatch(hbaPath); len(m) == 3 {
+	engine := GetActiveEngine()
+	if m := hbaPathDebianRe.FindStringSubmatch(hbaPath); len(m) == 3 {
 		if pgCtl, err := exec.LookPath("pg_ctlcluster"); err == nil {
 			cmd := exec.Command(pgCtl, m[1], m[2], "reload")
 			if err := cmd.Run(); err == nil {
@@ -239,28 +441,43 @@ func reloadPostgresFromHbaPath(hbaPath string) {
 			}
 		}
 		unit := fmt.Sprintf("postgresql@%s-%s", m[1], m[2])
-		cmd := exec.Command("systemctl", "reload", unit)
-		if err := cmd.Run(); err == nil {
-			log.Printf("[DB] systemctl reload %s", unit)
+		if reloadSystemdUnit(unit) {
 			return
+		}
+	}
+	if engine.Version != "" {
+		for _, unit := range []string{
+			fmt.Sprintf("pgpro-%s", engine.Version),
+			fmt.Sprintf("postgrespro-%s", engine.Version),
+			"pgpro",
+			"postgrespro",
+		} {
+			if reloadSystemdUnit(unit) {
+				return
+			}
 		}
 	}
 	reloadPostgresServiceBestEffort()
 }
 
+func reloadSystemdUnit(unit string) bool {
+	cmd := exec.Command("systemctl", "reload", unit)
+	if err := cmd.Run(); err == nil {
+		log.Printf("[DB] systemctl reload %s", unit)
+		return true
+	}
+	return false
+}
+
 func reloadPostgresServiceBestEffort() {
 	for _, unit := range []string{
 		"postgresql",
-		"postgresql@16-main",
-		"postgresql@15-main",
-		"postgresql@14-main",
-		"postgresql@13-main",
-		"postgresql@12-main",
-		"postgresql@11-main",
+		"pgpro-18", "pgpro-17", "pgpro-16", "pgpro-15", "pgpro-14",
+		"postgrespro",
+		"postgresql@18-main", "postgresql@17-main", "postgresql@16-main",
+		"postgresql@15-main", "postgresql@14-main",
 	} {
-		cmd := exec.Command("systemctl", "reload", unit)
-		if err := cmd.Run(); err == nil {
-			log.Printf("[DB] reloaded systemd unit %s", unit)
+		if reloadSystemdUnit(unit) {
 			return
 		}
 	}

@@ -45,6 +45,8 @@ export function RestartServer(arg1:string):Promise<void>;
 
 export function SelectDbEngine(arg1:string):Promise<void>;
 
+export function SelectDbEngineBin(arg1:string):Promise<void>;
+
 export function Shutdown(arg1:context.Context):Promise<void>;
 
 export function StartInstall(arg1:main.StartInstallOptions):Promise<void>;

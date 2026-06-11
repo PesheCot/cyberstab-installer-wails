@@ -16,12 +16,13 @@ type AppInfo = {
   postgresInstalled: boolean;
 };
 
-type DbEngineKind = "postgresql" | "jatoba";
+type DbEngineKind = "postgresql" | "postgrespro" | "jatoba";
 
 type DbEngineInfo = {
   kind: DbEngineKind;
   label: string;
   binDir: string;
+  version?: string;
   isManual?: boolean;
 };
 
@@ -53,9 +54,16 @@ function osLabel(os?: string) {
   return os || "—";
 }
 
-function dbEngineLabel(kind?: string) {
+function dbEngineLabel(kind?: string, engines?: DbEngineInfo[]) {
+  const found = engines?.find((e) => e.kind === kind);
+  if (found?.label) return found.label;
   if (kind === "jatoba") return "Jatoba";
+  if (kind === "postgrespro") return "Postgres Pro";
   return "PostgreSQL";
+}
+
+function pickPreferredEngine(engines: DbEngineInfo[]): DbEngineInfo | undefined {
+  return engines.find((e) => e.kind === "postgresql") ?? engines.find((e) => e.kind === "postgrespro") ?? engines[0];
 }
 
 function buildInstallStepsPreview(
@@ -143,6 +151,7 @@ export const App: React.FC = () => {
   // DB engine state (stage 1)
   const [dbEngines, setDbEngines] = useState<DbEngineInfo[]>([]);
   const [dbEngineKind, setDbEngineKind] = useState<DbEngineKind | "">("");
+  const [dbEngineBinDir, setDbEngineBinDir] = useState("");
   const [dbInstalled, setDbInstalled] = useState<boolean>(true);
   const [pgInstallerFound, setPgInstallerFound] = useState<boolean>(false);
   const [pgInstallerPath, setPgInstallerPath] = useState<string>("");
@@ -249,20 +258,20 @@ export const App: React.FC = () => {
         setPgInstallerFound(result.installerFound);
         setPgInstallerPath(result.installerPath);
         if (engines.length === 1) {
-          const kind = engines[0].kind;
-          setDbEngineKind(kind);
-          await window.go.main.App.SelectDbEngine(kind);
+          const e = engines[0];
+          setDbEngineKind(e.kind);
+          setDbEngineBinDir(e.binDir);
+          await window.go.main.App.SelectDbEngineBin(e.binDir);
         } else if (engines.length >= 2) {
-          const preferred =
-            (engines.find((e) => e.kind === "postgresql")?.kind ||
-              engines[0]?.kind ||
-              "") as DbEngineKind | "";
-          setDbEngineKind(preferred);
+          const preferred = pickPreferredEngine(engines);
           if (preferred) {
-            await window.go.main.App.SelectDbEngine(preferred);
+            setDbEngineKind(preferred.kind);
+            setDbEngineBinDir(preferred.binDir);
+            await window.go.main.App.SelectDbEngineBin(preferred.binDir);
           }
         } else {
           setDbEngineKind("");
+          setDbEngineBinDir("");
         }
         const i: AppInfo = await window.go.main.App.GetAppInfo();
         setInfo(i);
@@ -307,7 +316,9 @@ export const App: React.FC = () => {
     setDbChecking(true);
     (async () => {
       try {
-        if (dbEngineKind) {
+        if (dbEngineBinDir) {
+          await window.go.main.App.SelectDbEngineBin(dbEngineBinDir);
+        } else if (dbEngineKind) {
           await window.go.main.App.SelectDbEngine(dbEngineKind);
         }
         const result = await window.go.main.App.CheckOkidociDB(pgUser, pgPass);
@@ -345,13 +356,11 @@ export const App: React.FC = () => {
       setPgInstallerFound(result.installerFound);
       setPgInstallerPath(result.installerPath);
       if (engines.length > 0) {
-        const preferred =
-          (engines.find((e) => e.kind === "postgresql")?.kind ||
-            engines[0]?.kind ||
-            "") as DbEngineKind | "";
-        setDbEngineKind(preferred);
+        const preferred = pickPreferredEngine(engines);
         if (preferred) {
-          await window.go.main.App.SelectDbEngine(preferred);
+          setDbEngineKind(preferred.kind);
+          setDbEngineBinDir(preferred.binDir);
+          await window.go.main.App.SelectDbEngineBin(preferred.binDir);
         }
       }
       if (!result.installed) {
@@ -377,10 +386,11 @@ export const App: React.FC = () => {
         const engines = (result.engines || []) as DbEngineInfo[];
         setDbEngines(engines);
         setDbInstalled(result.installed);
-        const selected = engines.find((e) => e.binDir.toLowerCase().includes(dir.toLowerCase()))?.kind || dbEngineKind || engines[0]?.kind || "";
+        const selected = engines.find((e) => e.binDir.toLowerCase().includes(dir.toLowerCase())) ?? pickPreferredEngine(engines);
         if (selected) {
-          setDbEngineKind(selected as DbEngineKind);
-          await window.go.main.App.SelectDbEngine(selected);
+          setDbEngineKind(selected.kind);
+          setDbEngineBinDir(selected.binDir);
+          await window.go.main.App.SelectDbEngineBin(selected.binDir);
         }
         setPgInstallError("");
         const i: AppInfo = await window.go.main.App.GetAppInfo();
@@ -566,7 +576,9 @@ export const App: React.FC = () => {
     if (stage === 1 && needsPG && dbInstalled) {
       setPgVerifying(true);
       try {
-        if (dbEngineKind) {
+        if (dbEngineBinDir) {
+          await window.go.main.App.SelectDbEngineBin(dbEngineBinDir);
+        } else if (dbEngineKind) {
           await window.go.main.App.SelectDbEngine(dbEngineKind);
         }
         await window.go.main.App.VerifyPostgresPassword(pgUser, pgPass);
@@ -603,7 +615,9 @@ export const App: React.FC = () => {
     }
     setResetBusy(true);
     try {
-      if (dbEngineKind) {
+      if (dbEngineBinDir) {
+        await window.go.main.App.SelectDbEngineBin(dbEngineBinDir);
+      } else if (dbEngineKind) {
         await window.go.main.App.SelectDbEngine(dbEngineKind);
       }
       await window.go.main.App.ResetPostgresPassword(user, newPgPass);
@@ -810,33 +824,25 @@ export const App: React.FC = () => {
                       <>
                         {dbEngines.length > 1 ? (
                           <div className="radioList" style={{ marginTop: 4, marginBottom: 10 }}>
-                            <RadioRow
-                              name="dbEngine"
-                              label="PostgreSQL"
-                              checked={dbEngineKind === "postgresql"}
-                              onChange={async () => {
-                                setDbEngineKind("postgresql");
-                                setPgVerified(false);
-                                setPgVerifyError("");
-                                await window.go.main.App.SelectDbEngine("postgresql");
-                              }}
-                              disabled={uiLocked}
-                            />
-                            <RadioRow
-                              name="dbEngine"
-                              label="Jatoba"
-                              checked={dbEngineKind === "jatoba"}
-                              onChange={async () => {
-                                setDbEngineKind("jatoba");
-                                setPgVerified(false);
-                                setPgVerifyError("");
-                                await window.go.main.App.SelectDbEngine("jatoba");
-                              }}
-                              disabled={uiLocked}
-                            />
+                            {dbEngines.map((e) => (
+                              <RadioRow
+                                key={`${e.kind}:${e.binDir}`}
+                                name="dbEngine"
+                                label={e.label || dbEngineLabel(e.kind)}
+                                checked={dbEngineBinDir === e.binDir}
+                                onChange={async () => {
+                                  setDbEngineKind(e.kind);
+                                  setDbEngineBinDir(e.binDir);
+                                  setPgVerified(false);
+                                  setPgVerifyError("");
+                                  await window.go.main.App.SelectDbEngineBin(e.binDir);
+                                }}
+                                disabled={uiLocked}
+                              />
+                            ))}
                           </div>
                         ) : (
-                          <p className="wizardHint">Найдена СУБД: <b>{dbEngineLabel(dbEngineKind || dbEngines[0]?.kind)}</b>.</p>
+                          <p className="wizardHint">Найдена СУБД: <b>{dbEngineLabel(dbEngineKind || dbEngines[0]?.kind, dbEngines)}</b>.</p>
                         )}
                         <p className="wizardHint">
                           Укажите пользователя СУБД с правами суперпользователя — он нужен для создания ролей и инициализации базы данных.

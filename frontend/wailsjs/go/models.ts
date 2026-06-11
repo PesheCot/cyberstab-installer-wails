@@ -20,6 +20,7 @@ export namespace main {
 	    kind: string;
 	    label: string;
 	    binDir: string;
+	    version: string;
 	    isManual: boolean;
 	
 	    static createFrom(source: any = {}) {
@@ -31,6 +32,7 @@ export namespace main {
 	        this.kind = source["kind"];
 	        this.label = source["label"];
 	        this.binDir = source["binDir"];
+	        this.version = source["version"];
 	        this.isManual = source["isManual"];
 	    }
 	}

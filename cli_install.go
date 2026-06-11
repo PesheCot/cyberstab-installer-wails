@@ -40,19 +40,23 @@ func runCLIInstall(app *App) error {
 		if len(engines) > 1 {
 			opts := make([]huh.Option[string], len(engines))
 			for i, e := range engines {
-				opts[i] = huh.NewOption(fmt.Sprintf("%s (%s)", e.Label, e.BinDir), e.Kind)
+				opts[i] = huh.NewOption(fmt.Sprintf("%s (%s)", e.Label, e.BinDir), e.BinDir)
 			}
-			kind, err := promptSelect("Выберите движок СУБД", opts, engines[0].Kind)
+			binDir, err := promptSelect("Выберите движок СУБД", opts, engines[0].BinDir)
 			if err != nil {
 				return err
 			}
-			dbEngine = kind
+			_ = app.SelectDbEngineBin(binDir)
+			for _, e := range engines {
+				if e.BinDir == binDir {
+					dbEngine = e.Kind
+					break
+				}
+			}
 		} else if len(engines) == 1 {
 			dbEngine = engines[0].Kind
 			cliSummaryLine("СУБД", engines[0].Label)
-		}
-		if dbEngine != "" {
-			_ = app.SelectDbEngine(dbEngine)
+			_ = app.SelectDbEngineBin(engines[0].BinDir)
 		}
 
 		pgUser, pgPass, err = promptPostgresCredentials(app)

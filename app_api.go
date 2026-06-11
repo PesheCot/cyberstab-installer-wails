@@ -58,6 +58,7 @@ type DbEngineDTO struct {
 	Kind        string `json:"kind"`
 	Label       string `json:"label"`
 	BinDir      string `json:"binDir"`
+	Version     string `json:"version"`
 	IsManual    bool   `json:"isManual"`
 }
 
@@ -88,6 +89,7 @@ func (a *App) CheckDbInstalled() (DbCheckResult, error) {
 			Kind:     string(e.Kind),
 			Label:    e.DisplayName,
 			BinDir:   e.BinDir,
+			Version:  e.Version,
 			IsManual: isManual,
 		})
 	}
@@ -195,11 +197,20 @@ func (a *App) PickDbDir() (string, error) {
 	return p, nil
 }
 
+// SelectDbEngineBin activates a discovered DB engine by bin directory (precise when several are installed).
+func (a *App) SelectDbEngineBin(binDir string) error {
+	_, err := db.SelectEngineByBinDir(binDir)
+	return err
+}
+
 // SelectDbEngine activates one of discovered DB engines by kind.
 func (a *App) SelectDbEngine(kind string) error {
 	switch strings.TrimSpace(strings.ToLower(kind)) {
 	case string(db.EnginePostgreSQL):
 		_, err := db.SelectEngineByKind(db.EnginePostgreSQL)
+		return err
+	case string(db.EnginePostgresPro):
+		_, err := db.SelectEngineByKind(db.EnginePostgresPro)
 		return err
 	case string(db.EngineJatoba):
 		_, err := db.SelectEngineByKind(db.EngineJatoba)
