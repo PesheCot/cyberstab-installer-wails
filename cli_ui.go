@@ -37,6 +37,8 @@ var (
 			Foreground(lipgloss.Color("#3A4A5C"))
 )
 
+const cliBuildTag = "2026-06-10-hba-reset"
+
 func printCLIBanner(title, subtitle string) {
 	fmt.Println()
 	fmt.Println(cliBannerStyle.Render("  КИБЕРСТАБ"))
@@ -44,6 +46,7 @@ func printCLIBanner(title, subtitle string) {
 	if subtitle != "" {
 		fmt.Println(cliDimStyle.Render("  " + subtitle))
 	}
+	fmt.Println(cliDimStyle.Render("  сборка: " + cliBuildTag))
 	fmt.Println(cliDimStyle.Render("  " + strings.Repeat("─", 52)))
 	fmt.Println()
 }

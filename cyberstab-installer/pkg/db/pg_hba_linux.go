@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 )
 
 var hbaPasswordMethods = map[string]struct{}{
@@ -18,26 +19,37 @@ var hbaPasswordMethods = map[string]struct{}{
 	"password":      {},
 	"scram-sha-256": {},
 	"scram":         {},
+	"ident":         {},
 }
 
 var hbaPathRe = regexp.MustCompile(`/etc/postgresql/([^/]+)/([^/]+)/pg_hba\.conf`)
 
 func setUserPasswordPlatform(username, newPassword string) error {
 	sql := alterUserPasswordSQL(username, newPassword)
-	if _, err := runPSQLAsLocalSuperuser("postgres", sql); err == nil {
+	if os.Geteuid() == 0 {
+		if err := setUserPasswordWithHbaPatch(sql); err != nil {
+			return fmt.Errorf("не удалось сменить пароль для %s: %w", username, err)
+		}
 		return nil
-	} else if !isPostgresAuthError(err) || os.Geteuid() != 0 {
-		return fmt.Errorf("не удалось сменить пароль для %s: %w", username, err)
 	}
-
-	log.Printf("[DB] peer auth failed, temporarily switching pg_hba.conf local rules to peer")
-	if err := withTemporaryLocalPeerAuth(func() error {
-		_, runErr := runPSQLAsLocalSuperuser("postgres", sql)
-		return runErr
-	}); err != nil {
+	if _, err := runPSQLAsLocalSuperuser("postgres", sql); err != nil {
 		return fmt.Errorf("не удалось сменить пароль для %s: %w", username, err)
 	}
 	return nil
+}
+
+func setUserPasswordWithHbaPatch(sql string) error {
+	if _, err := runPSQLSuperuserMulti("postgres", sql); err == nil {
+		return nil
+	} else if !isPostgresAuthError(err) {
+		return err
+	}
+
+	log.Printf("[DB] auth failed, temporarily relaxing pg_hba.conf (local→peer, localhost→trust)")
+	return withTemporaryHbaAuthRelax(func() error {
+		_, runErr := runPSQLSuperuserMulti("postgres", sql)
+		return runErr
+	})
 }
 
 func isPostgresAuthError(err error) bool {
@@ -49,10 +61,15 @@ func isPostgresAuthError(err error) bool {
 		strings.Contains(lower, "password authentication") ||
 		strings.Contains(lower, "проверку подлинности") ||
 		strings.Contains(lower, "проверка подлинности") ||
-		strings.Contains(lower, "peer-доступ")
+		strings.Contains(lower, "peer-доступ") ||
+		strings.Contains(lower, "не прошёл проверку") ||
+		strings.Contains(lower, "не прошел проверку")
 }
 
 func findPgHbaConf() (string, error) {
+	if p, err := findPgHbaViaClusters(); err == nil && p != "" {
+		return p, nil
+	}
 	var matches []string
 	for _, pattern := range []string{
 		"/etc/postgresql/*/main/pg_hba.conf",
@@ -73,14 +90,41 @@ func findPgHbaConf() (string, error) {
 			return p, nil
 		}
 	}
-	return "", fmt.Errorf("pg_hba.conf не найден")
+	return "", fmt.Errorf("pg_hba.conf не найден (проверьте /etc/postgresql/*/main/pg_hba.conf)")
 }
 
-func patchHbaToLocalPeer(content string) (string, bool) {
+func findPgHbaViaClusters() (string, error) {
+	pgLs, err := exec.LookPath("pg_lsclusters")
+	if err != nil {
+		return "", err
+	}
+	out, err := exec.Command(pgLs, "--no-header").Output()
+	if err != nil {
+		return "", err
+	}
+	var candidates []string
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) < 2 {
+			continue
+		}
+		hba := filepath.Join("/etc/postgresql", fields[0], fields[1], "pg_hba.conf")
+		if st, statErr := os.Stat(hba); statErr == nil && !st.IsDir() {
+			candidates = append(candidates, hba)
+		}
+	}
+	if len(candidates) == 0 {
+		return "", fmt.Errorf("pg_lsclusters: hba not found")
+	}
+	sort.Strings(candidates)
+	return candidates[len(candidates)-1], nil
+}
+
+func patchHbaForPasswordReset(content string) (string, bool) {
 	lines := strings.Split(content, "\n")
 	changed := false
 	for i, line := range lines {
-		newLine, lineChanged := patchHbaLineToPeer(line)
+		newLine, lineChanged := patchHbaLineForPasswordReset(line)
 		if lineChanged {
 			changed = true
 			lines[i] = newLine
@@ -89,15 +133,16 @@ func patchHbaToLocalPeer(content string) (string, bool) {
 	return strings.Join(lines, "\n"), changed
 }
 
-func patchHbaLineToPeer(line string) (string, bool) {
+func patchHbaLineForPasswordReset(line string) (string, bool) {
 	trimmed := strings.TrimSpace(line)
 	if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 		return line, false
 	}
 	fields := strings.Fields(line)
-	if len(fields) < 4 || !strings.EqualFold(fields[0], "local") {
+	if len(fields) < 4 {
 		return line, false
 	}
+	connType := strings.ToLower(fields[0])
 	method := strings.ToLower(fields[len(fields)-1])
 	if method == "peer" || method == "trust" {
 		return line, false
@@ -105,22 +150,38 @@ func patchHbaLineToPeer(line string) (string, bool) {
 	if _, ok := hbaPasswordMethods[method]; !ok {
 		return line, false
 	}
-	fields[len(fields)-1] = "peer"
-	return strings.Join(fields, "\t"), true
+
+	switch connType {
+	case "local":
+		fields[len(fields)-1] = "peer"
+		return strings.Join(fields, "\t"), true
+	case "host", "hostssl", "hostnossl":
+		if len(fields) < 5 {
+			return line, false
+		}
+		address := fields[len(fields)-2]
+		if address == "127.0.0.1/32" || address == "::1/128" || strings.EqualFold(address, "localhost") {
+			fields[len(fields)-1] = "trust"
+			return strings.Join(fields, "\t"), true
+		}
+	}
+	return line, false
 }
 
-func withTemporaryLocalPeerAuth(fn func() error) error {
+func withTemporaryHbaAuthRelax(fn func() error) error {
 	hbaPath, err := findPgHbaConf()
 	if err != nil {
 		return err
 	}
+	log.Printf("[DB] using pg_hba.conf: %s", hbaPath)
+
 	original, err := os.ReadFile(hbaPath)
 	if err != nil {
 		return fmt.Errorf("не удалось прочитать %s: %w", hbaPath, err)
 	}
-	patched, changed := patchHbaToLocalPeer(string(original))
+	patched, changed := patchHbaForPasswordReset(string(original))
 	if !changed {
-		return fmt.Errorf("в %s нет local-правил с md5/scram для временной смены на peer", hbaPath)
+		return fmt.Errorf("в %s нет правил local/host с md5/scram для временной смены", hbaPath)
 	}
 
 	backupPath := hbaPath + ".cyberstab.bak"
@@ -134,19 +195,38 @@ func withTemporaryLocalPeerAuth(fn func() error) error {
 			log.Printf("[DB] pg_hba.conf restored: %s", hbaPath)
 		}
 		_ = os.Remove(backupPath)
-		reloadPostgresFromHbaPath(hbaPath)
+		reloadPostgresAggressive(hbaPath)
 	}()
 
 	if err := os.WriteFile(hbaPath, []byte(patched), 0600); err != nil {
 		return fmt.Errorf("не удалось записать %s: %w", hbaPath, err)
 	}
-	log.Printf("[DB] pg_hba.conf temporarily patched (local -> peer): %s", hbaPath)
-	reloadPostgresFromHbaPath(hbaPath)
+	log.Printf("[DB] pg_hba.conf patched (local→peer, localhost→trust): %s", hbaPath)
+	reloadPostgresAggressive(hbaPath)
 
 	if err := fn(); err != nil {
-		return err
+		return fmt.Errorf("после смены pg_hba: %w", err)
 	}
 	return nil
+}
+
+func reloadPostgresAggressive(hbaPath string) {
+	reloadPostgresFromHbaPath(hbaPath)
+	time.Sleep(800 * time.Millisecond)
+
+	if m := hbaPathRe.FindStringSubmatch(hbaPath); len(m) == 3 {
+		dataDir := filepath.Join("/var/lib/postgresql", m[1], m[2])
+		info, err := CheckPostgres()
+		if err == nil && info != nil && info.Installed {
+			pgCtl := filepath.Join(info.BinDir, "pg_ctl")
+			cmd := exec.Command("runuser", "-u", "postgres", "--", pgCtl, "reload", "-D", dataDir)
+			if err := cmd.Run(); err == nil {
+				log.Printf("[DB] pg_ctl reload -D %s", dataDir)
+				time.Sleep(400 * time.Millisecond)
+				return
+			}
+		}
+	}
 }
 
 func reloadPostgresFromHbaPath(hbaPath string) {
@@ -154,9 +234,15 @@ func reloadPostgresFromHbaPath(hbaPath string) {
 		if pgCtl, err := exec.LookPath("pg_ctlcluster"); err == nil {
 			cmd := exec.Command(pgCtl, m[1], m[2], "reload")
 			if err := cmd.Run(); err == nil {
-				log.Printf("[DB] reloaded cluster %s %s", m[1], m[2])
+				log.Printf("[DB] pg_ctlcluster %s %s reload", m[1], m[2])
 				return
 			}
+		}
+		unit := fmt.Sprintf("postgresql@%s-%s", m[1], m[2])
+		cmd := exec.Command("systemctl", "reload", unit)
+		if err := cmd.Run(); err == nil {
+			log.Printf("[DB] systemctl reload %s", unit)
+			return
 		}
 	}
 	reloadPostgresServiceBestEffort()

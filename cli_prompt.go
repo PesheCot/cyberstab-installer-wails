@@ -149,7 +149,7 @@ func runPostgresPasswordReset(app *App, user string) (string, error) {
 	}
 
 	printCLISection("Забыли пароль?")
-	cliHint("Сброс через runuser -u postgres; при md5 в pg_hba.conf правила временно меняются на peer и восстанавливаются.")
+	cliHint("Сброс: runuser -u postgres; при md5 в pg_hba.conf — временно local→peer, localhost→trust, затем восстановление.")
 	cliSummaryLine("Пользователь", user)
 
 	newPass, err := promptPassword("Новый пароль")

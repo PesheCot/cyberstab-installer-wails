@@ -99,16 +99,40 @@ func StartPostgresServiceBestEffort() {
 }
 
 // runPSQLAsLocalSuperuser connects via peer/trust as the postgres OS user.
-// When the installer runs under sudo/root, psql must not use -U postgres as root.
 func runPSQLAsLocalSuperuser(dbName, sql string) (string, error) {
+	return runPSQLSuperuserMulti(dbName, sql)
+}
+
+func runPSQLSuperuserMulti(dbName, sql string) (string, error) {
+	var lastErr error
+	for _, mode := range []string{"socket", "tcp", "tmp-socket"} {
+		out, err := runPSQLAsPostgresOS(dbName, sql, mode)
+		if err == nil {
+			return out, nil
+		}
+		lastErr = err
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("не удалось подключиться к PostgreSQL")
+	}
+	return "", lastErr
+}
+
+func runPSQLAsPostgresOS(dbName, sql, mode string) (string, error) {
 	info, err := CheckPostgres()
 	if err != nil || info == nil || !info.Installed {
 		return "", fmt.Errorf("PostgreSQL not found")
 	}
 	psql := filepath.Join(info.BinDir, "psql")
 	psqlArgs := []string{"-d", dbName, "-t", "-A", "-c", sql}
+	switch mode {
+	case "tcp":
+		psqlArgs = append([]string{"-h", "127.0.0.1"}, psqlArgs...)
+	case "tmp-socket":
+		psqlArgs = append([]string{"-h", "/tmp"}, psqlArgs...)
+	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
 	var cmd *exec.Cmd
@@ -127,7 +151,7 @@ func runPSQLAsLocalSuperuser(dbName, sql string) (string, error) {
 		return runPSQLAuth("postgres", "", dbName, sql)
 	}
 
-	cmd.Env = append(os.Environ(), "PGCONNECT_TIMEOUT=5")
+	cmd.Env = append(os.Environ(), "PGCONNECT_TIMEOUT=8")
 	hideCmd(cmd)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -136,9 +160,6 @@ func runPSQLAsLocalSuperuser(dbName, sql string) (string, error) {
 		msg := decodePSQLOutput(stderr.Bytes())
 		if msg == "" {
 			msg = err.Error()
-		}
-		if os.Geteuid() == 0 {
-			return "", fmt.Errorf("%s (нужен локальный peer-доступ для пользователя postgres)", msg)
 		}
 		return "", fmt.Errorf("%s", msg)
 	}
