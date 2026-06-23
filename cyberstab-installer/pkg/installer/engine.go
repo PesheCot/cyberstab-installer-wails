@@ -387,6 +387,12 @@ func (e *Engine) run() error {
 			}
 			if e.Options.Components.InstallClients {
 				_ = setClientFolderPermissionsLinux(dst)
+				ensureClientLogDirsLinux(dst)
+			}
+			if e.Options.Components.InstallServer || e.Options.Components.InstallDB {
+				if err := ConfigureLinuxPlatform(); err != nil {
+					log.Printf("[INSTALL] WARN: OS configure: %v", err)
+				}
 			}
 		}
 		if runtime.GOOS == "windows" && e.Options.Components.InstallClients {

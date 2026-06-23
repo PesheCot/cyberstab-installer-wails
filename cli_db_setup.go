@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/huh"
+
+	installer "cyberstab-installer/pkg/installer"
 )
 
 func promptDatabaseSetup(app *App, sourceRoot string) (dbEngine, pgUser, pgPass string, err error) {
@@ -27,25 +29,50 @@ func promptDatabaseSetup(app *App, sourceRoot string) (dbEngine, pgUser, pgPass 
 		installers := app.ListPostgresInstallers(sourceRoot)
 
 		if len(installers) > 0 {
-			cliHint("На носителе найдены установщики PostgreSQL:")
+			if isWindows() {
+				cliHint("На носителе найдены установщики PostgreSQL:")
+			} else {
+				osInfo, osErr := installer.DetectLinuxOS()
+				if osErr == nil {
+					cliHint(fmt.Sprintf("Доступные пакеты PostgreSQL в репозитории (%s):", osInfo.Type))
+				} else {
+					cliHint("Доступные пакеты PostgreSQL в репозитории:")
+				}
+			}
 			opts := make([]huh.Option[string], len(installers))
 			for i, inst := range installers {
-				opts[i] = huh.NewOption(fmt.Sprintf("%s — %s", inst.Label, inst.Path), inst.Path)
+				if isWindows() {
+					opts[i] = huh.NewOption(fmt.Sprintf("%s — %s", inst.Label, inst.Path), inst.Path)
+				} else {
+					opts[i] = huh.NewOption(fmt.Sprintf("%s (apt/dnf)", inst.Label), inst.Path)
+				}
 			}
 			choice, err := promptSelect("Выберите версию для установки", opts, installers[0].Path)
 			if err != nil {
 				return "", "", "", err
 			}
-			cliHint("Запуск установщика СУБД… Дождитесь завершения.")
+			if isWindows() {
+				cliHint("Запуск установщика СУБД… Дождитесь завершения.")
+			} else {
+				cliHint("Установка PostgreSQL из пакетов… Это может занять несколько минут.")
+			}
 			if err := app.InstallPostgresInstaller(choice); err != nil {
 				cliError(err.Error())
 			} else {
-				cliOK("Установщик СУБД завершён — проверяем…")
+				if isWindows() {
+					cliOK("Установщик СУБД завершён — проверяем…")
+				} else {
+					cliOK("Пакеты PostgreSQL установлены — проверяем…")
+				}
 			}
 			continue
 		}
 
-		action, err := promptSelect("СУБД не найдена и установщик на USB отсутствует", []huh.Option[string]{
+		noPkgHint := "СУБД не найдена и пакеты в репозитории недоступны"
+		if isWindows() {
+			noPkgHint = "СУБД не найдена и установщик на USB отсутствует"
+		}
+		action, err := promptSelect(noPkgHint, []huh.Option[string]{
 			huh.NewOption("Указать папку с bin/psql вручную", "manual"),
 			huh.NewOption("Повторить поиск", "retry"),
 			huh.NewOption("Отменить установку", "cancel"),

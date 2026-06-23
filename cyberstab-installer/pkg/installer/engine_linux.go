@@ -51,6 +51,19 @@ func finishInstallLinux(e *Engine) error {
 		return nil
 	}
 
+	// Astra SE: install ZPS key (*.key → /etc/digsig/keys).
+	if e.ProgressEmitter != nil {
+		e.ProgressEmitter(88, "Ключ ЗПС (Astra SE)…")
+	}
+	if err := installAstraDigsigKey(e.InstallDir); err != nil {
+		log.Printf("[DIGSIG] WARN: %v", err)
+		if e.ProgressEmitter != nil {
+			e.ProgressEmitter(89, "Ключ ЗПС: "+err.Error())
+		}
+	} else if e.ProgressEmitter != nil {
+		e.ProgressEmitter(89, "Ключ ЗПС установлен")
+	}
+
 	if e.ProgressEmitter != nil {
 		e.ProgressEmitter(90, "Настройка автозапуска сервера…")
 	}

@@ -36,6 +36,22 @@ export namespace main {
 	        this.isManual = source["isManual"];
 	    }
 	}
+	export class PostgresInstallerDTO {
+	    path: string;
+	    label: string;
+	    version: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PostgresInstallerDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.label = source["label"];
+	        this.version = source["version"];
+	    }
+	}
 	export class DbCheckResult {
 	    engines: DbEngineDTO[];
 	    installed: boolean;

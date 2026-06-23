@@ -33,8 +33,22 @@ func (a *App) ValidateSourceRoot(root string, wantServerOrDB, wantClients bool) 
 	}, nil
 }
 
-// ListPostgresInstallers searches USB/distrib for PostgreSQL installers.
+// ListPostgresInstallers returns installable PostgreSQL options (repo packages on Linux, files on Windows).
 func (a *App) ListPostgresInstallers(sourceRoot string) []PostgresInstallerDTO {
+	if !isWindows() {
+		if pkgs, err := installer.FindAvailablePostgresPackages(); err == nil && len(pkgs) > 0 {
+			dto := make([]PostgresInstallerDTO, 0, len(pkgs))
+			for _, p := range pkgs {
+				dto = append(dto, PostgresInstallerDTO{
+					Path:    p.Version,
+					Label:   p.Label,
+					Version: p.Version,
+				})
+			}
+			return dto
+		}
+		return nil
+	}
 	roots := postgresInstallerSearchRoots(sourceRoot)
 	found := installer.FindPostgresInstallers(roots)
 	dto := make([]PostgresInstallerDTO, 0, len(found))
@@ -48,9 +62,12 @@ func (a *App) ListPostgresInstallers(sourceRoot string) []PostgresInstallerDTO {
 	return dto
 }
 
-// InstallPostgresInstaller runs the selected PostgreSQL installer package.
-func (a *App) InstallPostgresInstaller(installerPath string) error {
-	return installer.RunPostgresInstaller(installerPath)
+// InstallPostgresInstaller installs PostgreSQL from a repo package (Linux) or installer file (Windows).
+func (a *App) InstallPostgresInstaller(selection string) error {
+	if !isWindows() && installer.IsPackageManagerPostgresInstall(selection) {
+		return installer.InstallPostgresPackage(selection)
+	}
+	return installer.RunPostgresInstaller(selection)
 }
 
 func postgresInstallerSearchRoots(sourceRoot string) []string {

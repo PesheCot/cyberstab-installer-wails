@@ -29,6 +29,10 @@ export function Greet(arg1:string):Promise<string>;
 
 export function InstallPostgresFromUsb():Promise<void>;
 
+export function InstallPostgresInstaller(arg1:string):Promise<void>;
+
+export function ListPostgresInstallers(arg1:string):Promise<Array<main.PostgresInstallerDTO>>;
+
 export function LaunchClient(arg1:string):Promise<void>;
 
 export function PickDbDir():Promise<string>;

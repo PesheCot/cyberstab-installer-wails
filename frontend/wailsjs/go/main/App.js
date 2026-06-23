@@ -54,6 +54,14 @@ export function InstallPostgresFromUsb() {
   return window['go']['main']['App']['InstallPostgresFromUsb']();
 }
 
+export function InstallPostgresInstaller(arg1) {
+  return window['go']['main']['App']['InstallPostgresInstaller'](arg1);
+}
+
+export function ListPostgresInstallers(arg1) {
+  return window['go']['main']['App']['ListPostgresInstallers'](arg1);
+}
+
 export function LaunchClient(arg1) {
   return window['go']['main']['App']['LaunchClient'](arg1);
 }

@@ -155,6 +155,7 @@ export const App: React.FC = () => {
   const [dbInstalled, setDbInstalled] = useState<boolean>(true);
   const [pgInstallerFound, setPgInstallerFound] = useState<boolean>(false);
   const [pgInstallerPath, setPgInstallerPath] = useState<string>("");
+  const [pgPackageOptions, setPgPackageOptions] = useState<{ path: string; label: string; version: string }[]>([]);
   const [pgInstalling, setPgInstalling] = useState<boolean>(false);
   const [pgInstallError, setPgInstallError] = useState<string>("");
 
@@ -257,6 +258,17 @@ export const App: React.FC = () => {
         setDbInstalled(result.installed);
         setPgInstallerFound(result.installerFound);
         setPgInstallerPath(result.installerPath);
+        if (!result.installed) {
+          const i: AppInfo = await window.go.main.App.GetAppInfo();
+          if (i.os === "linux" && result.installerFound) {
+            const pkgs = await window.go.main.App.ListPostgresInstallers(sourceRoot || "");
+            setPgPackageOptions((pkgs || []) as { path: string; label: string; version: string }[]);
+          } else {
+            setPgPackageOptions([]);
+          }
+        } else {
+          setPgPackageOptions([]);
+        }
         if (engines.length === 1) {
           const e = engines[0];
           setDbEngineKind(e.kind);
@@ -279,7 +291,7 @@ export const App: React.FC = () => {
         // ignore
       }
     })();
-  }, [stage]);
+  }, [stage, sourceRoot]);
 
   // Re-try auto-detect when component selection changes (if user hasn't typed a path).
   useEffect(() => {
@@ -344,32 +356,49 @@ export const App: React.FC = () => {
     if (p) setInstallDir(p);
   };
 
+  const refreshDbAfterPgInstall = async () => {
+    const result = await window.go.main.App.CheckDbInstalled();
+    const engines = (result.engines || []) as DbEngineInfo[];
+    setDbEngines(engines);
+    setDbInstalled(result.installed);
+    setPgInstallerFound(result.installerFound);
+    setPgInstallerPath(result.installerPath);
+    if (engines.length > 0) {
+      const preferred = pickPreferredEngine(engines);
+      if (preferred) {
+        setDbEngineKind(preferred.kind);
+        setDbEngineBinDir(preferred.binDir);
+        await window.go.main.App.SelectDbEngineBin(preferred.binDir);
+      }
+    }
+    if (!result.installed) {
+      setPgInstallError("СУБД не обнаружена после установки. Попробуйте снова или укажите путь вручную.");
+    } else {
+      setPgInstallError("");
+      const i: AppInfo = await window.go.main.App.GetAppInfo();
+      setInfo(i);
+    }
+  };
+
   const onInstallPgFromUsb = async () => {
     setPgInstalling(true);
     setPgInstallError("");
     try {
       await window.go.main.App.InstallPostgresFromUsb();
-      const result = await window.go.main.App.CheckDbInstalled();
-      const engines = (result.engines || []) as DbEngineInfo[];
-      setDbEngines(engines);
-      setDbInstalled(result.installed);
-      setPgInstallerFound(result.installerFound);
-      setPgInstallerPath(result.installerPath);
-      if (engines.length > 0) {
-        const preferred = pickPreferredEngine(engines);
-        if (preferred) {
-          setDbEngineKind(preferred.kind);
-          setDbEngineBinDir(preferred.binDir);
-          await window.go.main.App.SelectDbEngineBin(preferred.binDir);
-        }
-      }
-      if (!result.installed) {
-        setPgInstallError("СУБД не обнаружена после установки. Попробуйте снова или укажите путь вручную.");
-      } else {
-        setPgInstallError("");
-        const i: AppInfo = await window.go.main.App.GetAppInfo();
-        setInfo(i);
-      }
+      await refreshDbAfterPgInstall();
+    } catch (e: any) {
+      setPgInstallError(String(e?.message || e));
+    } finally {
+      setPgInstalling(false);
+    }
+  };
+
+  const onInstallPgPackage = async (version: string) => {
+    setPgInstalling(true);
+    setPgInstallError("");
+    try {
+      await window.go.main.App.InstallPostgresInstaller(version);
+      await refreshDbAfterPgInstall();
     } catch (e: any) {
       setPgInstallError(String(e?.message || e));
     } finally {
@@ -801,17 +830,40 @@ export const App: React.FC = () => {
                           Не найдены PostgreSQL или Jatoba в стандартных путях.
                         </p>
                         <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 10 }}>
-                          {pgInstallerFound && (
-                            <button
-                              type="button"
-                              className={cls("btnPrimary", pgInstalling && "disabled")}
-                              onClick={onInstallPgFromUsb}
-                              disabled={pgInstalling}
-                            >
-                              {pgInstalling ? "Установка PostgreSQL…" : "Установить PostgreSQL с флешки"}
-                            </button>
+                          {info?.os === "linux" ? (
+                            pgPackageOptions.length > 0 ? (
+                              <>
+                                <p className="wizardHint">Доступные версии PostgreSQL в репозитории:</p>
+                                {pgPackageOptions.map((pkg) => (
+                                  <button
+                                    key={pkg.version}
+                                    type="button"
+                                    className={cls("btnPrimary", pgInstalling && "disabled")}
+                                    onClick={() => onInstallPgPackage(pkg.version)}
+                                    disabled={pgInstalling}
+                                  >
+                                    {pgInstalling ? "Установка PostgreSQL…" : `Установить ${pkg.label}`}
+                                  </button>
+                                ))}
+                              </>
+                            ) : (
+                              !pgInstallerFound && (
+                                <p className="wizardHint">Пакеты PostgreSQL в репозитории не найдены.</p>
+                              )
+                            )
+                          ) : (
+                            pgInstallerFound && (
+                              <button
+                                type="button"
+                                className={cls("btnPrimary", pgInstalling && "disabled")}
+                                onClick={onInstallPgFromUsb}
+                                disabled={pgInstalling}
+                              >
+                                {pgInstalling ? "Установка PostgreSQL…" : "Установить PostgreSQL с флешки"}
+                              </button>
+                            )
                           )}
-                          {!pgInstallerFound && (
+                          {info?.os !== "linux" && !pgInstallerFound && (
                             <p className="wizardHint">Установщик PostgreSQL (postgresql*.exe) не найден на USB-накопителе.</p>
                           )}
                           <button type="button" className="btn" onClick={onPickDbDir} disabled={pgInstalling}>

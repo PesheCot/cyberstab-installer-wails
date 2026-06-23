@@ -94,14 +94,20 @@ func (a *App) CheckDbInstalled() (DbCheckResult, error) {
 		})
 	}
 	path := ""
+	installerFound := false
 	if len(dto) == 0 {
-		path = findPostgresInstallerOnDrives()
+		if isWindows() {
+			path = findPostgresInstallerOnDrives()
+			installerFound = path != ""
+		} else if pkgs, err := installer.FindAvailablePostgresPackages(); err == nil && len(pkgs) > 0 {
+			installerFound = true
+		}
 	}
 	active := db.GetActiveEngine()
 	return DbCheckResult{
 		Engines:          dto,
 		Installed:        len(dto) > 0,
-		InstallerFound:   path != "",
+		InstallerFound:   installerFound,
 		InstallerPath:    path,
 		ActiveEngineKind: string(active.Kind),
 	}, nil
