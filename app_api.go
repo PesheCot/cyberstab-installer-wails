@@ -284,10 +284,7 @@ func findPostgresInstallerOnDrives() string {
 		}
 		return ""
 	}
-	for _, root := range []string{"/mnt", "/media", "/run/media"} {
-		if _, err := os.Stat(root); err != nil {
-			continue
-		}
+	for _, root := range fs.MountSearchRoots() {
 		if p := findPostgresInstallerUnder(root); p != "" {
 			return p
 		}

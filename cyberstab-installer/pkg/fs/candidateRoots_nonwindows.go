@@ -52,5 +52,27 @@ func candidateRoots() []string {
 			}
 		}
 	}
+
+	// Astra / Fly DE: removable media is often at /run/user/<uid>/media/<label>
+	runUser := "/run/user"
+	if entries, err := os.ReadDir(runUser); err == nil {
+		for _, u := range entries {
+			if !u.IsDir() {
+				continue
+			}
+			mediaBase := filepath.Join(runUser, u.Name(), "media")
+			add(mediaBase)
+			labels, err := os.ReadDir(mediaBase)
+			if err != nil {
+				continue
+			}
+			for _, label := range labels {
+				if label.IsDir() {
+					add(filepath.Join(mediaBase, label.Name()))
+				}
+			}
+		}
+	}
+
 	return roots
 }

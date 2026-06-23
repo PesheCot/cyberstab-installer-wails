@@ -97,28 +97,8 @@ func postgresInstallerSearchRoots(sourceRoot string) []string {
 			add(fmt.Sprintf("%c:\\", c))
 		}
 	} else {
-		for _, base := range []string{"/run/media", "/media", "/mnt"} {
+		for _, base := range fs.MountSearchRoots() {
 			add(base)
-			entries, err := os.ReadDir(base)
-			if err != nil {
-				continue
-			}
-			for _, e := range entries {
-				if !e.IsDir() {
-					continue
-				}
-				p1 := filepath.Join(base, e.Name())
-				add(p1)
-				sub, err := os.ReadDir(p1)
-				if err != nil {
-					continue
-				}
-				for _, s := range sub {
-					if s.IsDir() {
-						add(filepath.Join(p1, s.Name()))
-					}
-				}
-			}
 		}
 	}
 	return roots

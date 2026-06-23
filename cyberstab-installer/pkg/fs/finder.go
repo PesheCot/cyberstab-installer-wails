@@ -14,6 +14,11 @@ type Finder struct {
 	ServerDirNames []string
 }
 
+// MountSearchRoots returns paths where removable USB media may be mounted.
+func MountSearchRoots() []string {
+	return candidateRoots()
+}
+
 func NewFinder() *Finder {
 	// Defaults: keep a superset; callers can override.
 	return &Finder{
