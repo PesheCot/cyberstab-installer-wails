@@ -1,4 +1,4 @@
-//go:build linux && !cyberstab_uninstaller && !cyberstab_manager && !bindings
+//go:build linux && !cyberstab_uninstaller && !cyberstab_manager && !bindings && !clionly
 
 package main
 

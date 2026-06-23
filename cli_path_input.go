@@ -1,4 +1,4 @@
-//go:build !bindings
+//go:build !bindings || clionly
 
 package main
 

@@ -1,4 +1,4 @@
-//go:build cyberstab_uninstaller
+//go:build cyberstab_uninstaller && !clionly
 
 package main
 
