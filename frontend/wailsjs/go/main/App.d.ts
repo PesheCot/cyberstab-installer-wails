@@ -31,9 +31,9 @@ export function InstallPostgresFromUsb():Promise<void>;
 
 export function InstallPostgresInstaller(arg1:string):Promise<void>;
 
-export function ListPostgresInstallers(arg1:string):Promise<Array<main.PostgresInstallerDTO>>;
-
 export function LaunchClient(arg1:string):Promise<void>;
+
+export function ListPostgresInstallers(arg1:string):Promise<Array<main.PostgresInstallerDTO>>;
 
 export function PickDbDir():Promise<string>;
 
@@ -60,5 +60,9 @@ export function StartServer():Promise<void>;
 export function StopServer(arg1:string):Promise<void>;
 
 export function Uninstall(arg1:main.UninstallOptions):Promise<void>;
+
+export function ValidateSourceRoot(arg1:string,arg2:boolean,arg3:boolean):Promise<main.SourceValidationResult>;
+
+export function ValidateSqlBackupPath(arg1:string):Promise<void>;
 
 export function VerifyPostgresPassword(arg1:string,arg2:string):Promise<void>;

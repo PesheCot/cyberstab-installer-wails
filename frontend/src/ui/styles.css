@@ -836,8 +836,11 @@ textarea {
   border: 1px solid rgba(142, 163, 240, 0.55);
   background: #f2f6fb;
   color: #303ee6;
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  line-height: 0;
   cursor: pointer;
   transition: background var(--transition), color var(--transition), box-shadow var(--transition);
   box-shadow:
@@ -846,11 +849,16 @@ textarea {
 }
 
 .btnFooterBack svg {
+  display: block;
+  width: 8px;
+  height: 12px;
+  flex-shrink: 0;
   fill: none;
   stroke: currentColor;
   stroke-width: 2;
   stroke-linecap: round;
   stroke-linejoin: round;
+  transform: translateX(-1px);
 }
 
 .btnFooterBack:hover:not(.disabled) {

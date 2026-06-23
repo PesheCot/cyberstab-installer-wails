@@ -1217,8 +1217,8 @@ export const App: React.FC = () => {
                 disabled={uiLocked || stage === 0}
                 aria-label="Назад"
               >
-                <svg width="13" height="18" viewBox="0 0 13 18" aria-hidden="true">
-                  <path d="M9.8 2.2 3.2 9l6.6 6.8" />
+                <svg viewBox="0 0 8 12" aria-hidden="true">
+                  <path d="M6.5 1.5 2 6l4.5 4.5" />
                 </svg>
               </button>
               <button

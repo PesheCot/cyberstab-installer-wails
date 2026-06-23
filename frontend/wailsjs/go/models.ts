@@ -36,22 +36,6 @@ export namespace main {
 	        this.isManual = source["isManual"];
 	    }
 	}
-	export class PostgresInstallerDTO {
-	    path: string;
-	    label: string;
-	    version: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new PostgresInstallerDTO(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.path = source["path"];
-	        this.label = source["label"];
-	        this.version = source["version"];
-	    }
-	}
 	export class DbCheckResult {
 	    engines: DbEngineDTO[];
 	    installed: boolean;
@@ -115,6 +99,22 @@ export namespace main {
 	        this.exists = source["exists"];
 	    }
 	}
+	export class PostgresInstallerDTO {
+	    path: string;
+	    label: string;
+	    version: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PostgresInstallerDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.label = source["label"];
+	        this.version = source["version"];
+	    }
+	}
 	export class ServerStatusDTO {
 	    taskExists: boolean;
 	    running: boolean;
@@ -172,6 +172,20 @@ export namespace main {
 		}
 	}
 	
+	export class SourceValidationResult {
+	    valid: boolean;
+	    missing: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new SourceValidationResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.valid = source["valid"];
+	        this.missing = source["missing"];
+	    }
+	}
 	export class StartInstallOptions {
 	    installServer: boolean;
 	    installClients: boolean;
