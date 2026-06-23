@@ -10,12 +10,12 @@ export CGO_ENABLED=0
 export GOOS=linux
 export GOARCH=amd64
 
-echo "==> Linux CLI installer (static)"
-go build -tags "clionly" -ldflags "-s -w" -o build/bin/install-linux-cli .
+echo "==> Linux CLI installer (static, any distro)"
+go build -tags "clionly" -ldflags "-s -w" -o build/bin/install-linux-static .
 
 echo "==> Linux CLI uninstaller (static)"
-go build -tags "cyberstab_uninstaller,clionly" -ldflags "-s -w" -o build/bin/cyberstab-uninstaller-cli .
+go build -tags "cyberstab_uninstaller,clionly" -ldflags "-s -w" -o build/bin/cyberstab-uninstaller-static .
 
 echo "==> Done:"
-echo "    $ROOT/build/bin/install-linux-cli"
-echo "    $ROOT/build/bin/cyberstab-uninstaller-cli"
+echo "    $ROOT/build/bin/install-linux-static"
+echo "    $ROOT/build/bin/cyberstab-uninstaller-static"

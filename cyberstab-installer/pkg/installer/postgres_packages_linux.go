@@ -60,19 +60,57 @@ func DetectLinuxOS() (LinuxOSInfo, error) {
 		}
 		return info, nil
 	}
+	if info, ok := detectFromOSRelease(); ok {
+		return info, nil
+	}
 	if _, err := os.Stat("/etc/debian_version"); err == nil {
-		if rel, err := os.ReadFile("/etc/os-release"); err == nil {
-			relLower := strings.ToLower(string(rel))
-			if strings.Contains(relLower, "astra") || strings.Contains(relLower, "redos") || strings.Contains(relLower, "osnova") {
-				return LinuxOSInfo{}, fmt.Errorf("ОС не распознана однозначно")
-			}
-		}
 		if b, err := os.ReadFile("/etc/debian_version"); err == nil {
 			ver := strings.TrimSpace(strings.Split(string(b), ".")[0])
 			return LinuxOSInfo{Type: "DEBIAN", Version: ver}, nil
 		}
 	}
 	return LinuxOSInfo{}, fmt.Errorf("ОС не распознана для установки PostgreSQL из пакетов")
+}
+
+func detectFromOSRelease() (LinuxOSInfo, bool) {
+	vals := parseOSRelease()
+	if len(vals) == 0 {
+		return LinuxOSInfo{}, false
+	}
+	id := strings.ToLower(strings.TrimSpace(vals["ID"]))
+	name := strings.ToLower(strings.TrimSpace(vals["NAME"]))
+	version := strings.TrimSpace(vals["VERSION_ID"])
+	switch {
+	case id == "ubuntu":
+		return LinuxOSInfo{Type: "UBUNTU", Version: version}, true
+	case id == "osnova" || strings.Contains(name, "основа") || strings.Contains(name, "osnova"):
+		return LinuxOSInfo{Type: "OSNOVA", Version: version}, true
+	case id == "debian":
+		return LinuxOSInfo{Type: "DEBIAN", Version: version}, true
+	case strings.Contains(strings.ToLower(vals["ID_LIKE"]), "debian"):
+		return LinuxOSInfo{Type: "DEBIAN", Version: version}, true
+	}
+	return LinuxOSInfo{}, false
+}
+
+func parseOSRelease() map[string]string {
+	b, err := os.ReadFile("/etc/os-release")
+	if err != nil {
+		return nil
+	}
+	out := map[string]string{}
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		out[k] = strings.Trim(strings.TrimSpace(v), `"`)
+	}
+	return out
 }
 
 // FindAvailablePostgresPackages queries apt/dnf for installable PostgreSQL versions.
@@ -87,7 +125,7 @@ func FindAvailablePostgresPackages() ([]PostgresPackageOption, error) {
 	switch osInfo.Type {
 	case "ALT":
 		versions = aptCachePostgresVersions(`^postgresql[0-9][0-9]-server$`, pgPkgAltRe, 1)
-	case "ASTRA", "DEBIAN":
+	case "ASTRA", "DEBIAN", "UBUNTU", "OSNOVA":
 		versions = aptCachePostgresVersions(`^postgresql-[0-9]+$`, pgPkgDebianRe, 1)
 	case "REDOS":
 		versions = dnfPostgresVersions()
@@ -223,7 +261,7 @@ func InstallPostgresPackage(version string) error {
 		if err := altInitdbIfNeeded(); err != nil {
 			log.Printf("[PG-PKG] WARN: initdb/service: %v", err)
 		}
-	case "ASTRA", "DEBIAN":
+	case "ASTRA", "DEBIAN", "UBUNTU", "OSNOVA":
 		if err := runPackageCmd("apt-get", "update"); err != nil {
 			return err
 		}

@@ -9,7 +9,32 @@ on:
       - ".github/**"
 
 jobs:
-  build-linux-cli:
+  # Universal GUI+CLI (glibc 2.28+): Astra, Ubuntu, Debian, ALT, RED OS, Основа, etc.
+  build-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build on Debian buster (max compatibility)
+        run: |
+          docker build -f Dockerfile.linux-buster -t cyberstab-wails-buster .
+          cid=$(docker create cyberstab-wails-buster)
+          mkdir -p build/bin
+          docker cp "$cid:/src/build/bin/install" build/bin/install-linux
+          docker cp "$cid:/src/build/bin/cyberstab-uninstaller" build/bin/cyberstab-uninstaller-linux
+          docker rm "$cid"
+
+      - name: Upload universal installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: cyberstab-install-linux-amd64
+          path: |
+            build/bin/install-linux
+            build/bin/cyberstab-uninstaller-linux
+          if-no-files-found: error
+
+  # Static CLI-only fallback (any glibc, headless servers)
+  build-linux-static:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -23,70 +48,11 @@ jobs:
           chmod +x build-linux-cli.sh
           ./build-linux-cli.sh
 
-      - name: Upload CLI binaries
+      - name: Upload static CLI
         uses: actions/upload-artifact@v4
         with:
-          name: cyberstab-install-linux-cli-amd64
+          name: cyberstab-install-linux-static-amd64
           path: |
-            build/bin/install-linux-cli
-            build/bin/cyberstab-uninstaller-cli
-          if-no-files-found: error
-
-  build-linux-gui-astra17:
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Build Wails GUI on Debian buster (glibc 2.28)
-        run: |
-          docker build -f Dockerfile.linux-buster -t cyberstab-wails-buster .
-          cid=$(docker create cyberstab-wails-buster)
-          mkdir -p build/bin
-          docker cp "$cid:/src/build/bin/install" build/bin/install
-          docker cp "$cid:/src/build/bin/cyberstab-uninstaller" build/bin/cyberstab-uninstaller
-          docker rm "$cid"
-
-      - name: Upload GUI binaries (Astra 1.7 / glibc 2.28)
-        uses: actions/upload-artifact@v4
-        with:
-          name: cyberstab-install-linux-gui-astra17-amd64
-          path: |
-            build/bin/install
-            build/bin/cyberstab-uninstaller
-          if-no-files-found: error
-
-  build-linux-gui-astra18:
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - name: Install Linux build deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev build-essential
-
-      - name: Install Wails CLI
-        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
-
-      - name: Build GUI (Astra 1.8+ / glibc 2.36)
-        run: |
-          export PATH="$HOME/go/bin:$PATH"
-          chmod +x build-linux.sh
-          ./build-linux.sh
-
-      - name: Upload GUI binaries (Astra 1.8+)
-        uses: actions/upload-artifact@v4
-        with:
-          name: cyberstab-install-linux-gui-astra18-amd64
-          path: |
-            build/bin/install
-            build/bin/cyberstab-uninstaller
+            build/bin/install-linux-static
+            build/bin/cyberstab-uninstaller-static
           if-no-files-found: error

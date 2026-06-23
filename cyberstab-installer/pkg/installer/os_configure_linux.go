@@ -36,8 +36,10 @@ func ConfigureLinuxPlatform() error {
 		return configureAstra(osInfo)
 	case "REDOS":
 		return configureREDOS(osInfo)
-	case "DEBIAN":
+	case "DEBIAN", "UBUNTU":
 		return configureDebian()
+	case "OSNOVA":
+		return configureOsnova()
 	default:
 		return nil
 	}
@@ -91,6 +93,13 @@ func configureREDOS(osInfo LinuxOSInfo) error {
 }
 
 func configureDebian() error {
+	if err := aptInstallPackage("libusb-0.1-4"); err != nil {
+		log.Printf("[OS-CFG] WARN: libusb-0.1-4: %v", err)
+	}
+	return configurePgHba()
+}
+
+func configureOsnova() error {
 	if err := aptInstallPackage("libusb-0.1-4"); err != nil {
 		log.Printf("[OS-CFG] WARN: libusb-0.1-4: %v", err)
 	}

@@ -38,7 +38,7 @@ var (
 			Foreground(lipgloss.Color("#3A4A5C"))
 )
 
-const cliBuildTag = "2026-06-23-astra-media"
+const cliBuildTag = "2026-06-23-linux-universal"
 
 func printCLIBanner(title, subtitle string) {
 	fmt.Println()
