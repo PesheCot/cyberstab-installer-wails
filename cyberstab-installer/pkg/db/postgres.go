@@ -514,6 +514,23 @@ func SetUserPassword(username, newPassword string) error {
 }
 
 func runPSQLAuth(user, password, dbName, sql string) (string, error) {
+	// On Linux, psql without -h uses a Unix socket and pg_hba "local ... peer" rules,
+	// which ignore PGPASSWORD when the installer runs as root. Force TCP for password checks.
+	if runtime.GOOS == "linux" && strings.TrimSpace(password) != "" {
+		var lastErr error
+		for _, host := range []string{"127.0.0.1", "localhost"} {
+			out, err := execPSQLAuth(user, password, dbName, sql, host)
+			if err == nil {
+				return out, nil
+			}
+			lastErr = err
+		}
+		return "", lastErr
+	}
+	return execPSQLAuth(user, password, dbName, sql, "")
+}
+
+func execPSQLAuth(user, password, dbName, sql, host string) (string, error) {
 	user = normalizePgUser(user)
 	info, err := CheckPostgres()
 	if err != nil || info == nil || !info.Installed {
@@ -528,6 +545,9 @@ func runPSQLAuth(user, password, dbName, sql string) (string, error) {
 	defer cancel()
 
 	args := []string{"-U", user, "-d", dbName, "-t", "-A", "-c", sql}
+	if host != "" {
+		args = append([]string{"-h", host}, args...)
+	}
 	if strings.TrimSpace(password) == "" {
 		args = append([]string{"-w"}, args...)
 	}

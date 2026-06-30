@@ -691,7 +691,7 @@ export const App: React.FC = () => {
             <div className="hint">
               Новый пароль для пользователя <b>{pgUser.trim() || "—"}</b>.
               <br />
-              Сброс выполняется через локальный доступ СУБД (нужны права администратора Windows).
+              Сброс выполняется через локальный доступ СУБД (нужны права root / администратора).
             </div>
             <div className="row" style={{ marginTop: 12 }}>
               <input className="input" type="password" value={newPgPass} onChange={(e) => setNewPgPass(e.target.value)} placeholder="Новый пароль" disabled={resetBusy} />

@@ -180,6 +180,9 @@ func systemdUnitsForEngine(engine EngineInfo) []string {
 	units = append(units,
 		"pgpro-18", "pgpro-17", "pgpro-16", "pgpro-15", "pgpro-14",
 		"postgresql@18-main", "postgresql@17-main", "postgresql@16-main",
+		"postgresql@15-main", "postgresql@14-main", "postgresql@13-main",
+		"postgresql@12-main", "postgresql@11-main", "postgresql@10-main",
+		"postgresql@9.6-main",
 	)
 	return uniqueNonEmpty(units)
 }
@@ -481,7 +484,9 @@ func reloadPostgresServiceBestEffort() {
 		"pgpro-18", "pgpro-17", "pgpro-16", "pgpro-15", "pgpro-14",
 		"postgrespro",
 		"postgresql@18-main", "postgresql@17-main", "postgresql@16-main",
-		"postgresql@15-main", "postgresql@14-main",
+		"postgresql@15-main", "postgresql@14-main", "postgresql@13-main",
+		"postgresql@12-main", "postgresql@11-main", "postgresql@10-main",
+		"postgresql@9.6-main",
 	} {
 		if reloadSystemdUnit(unit) {
 			return
