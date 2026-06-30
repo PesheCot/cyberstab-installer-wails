@@ -949,35 +949,41 @@ export const App: React.FC = () => {
                                 </svg>
                               </button>
                             </div>
-                            {pgVerifyError && <p className="pgInlineError" title={pgVerifyError}>{pgVerifyError}</p>}
                           </div>
-                          {info?.postgresInstalled && (
-                            <button
-                              type="button"
-                              className={cls("btnLink", uiLocked && "disabled")}
-                              onClick={() => {
-                                setShowResetModal(true);
-                                setResetError("");
-                                setNewPgPass("");
-                                setNewPgPass2("");
-                              }}
-                              disabled={uiLocked || pgUser.trim().length === 0}
-                              title={pgUser.trim().length === 0 ? "Сначала укажите пользователя PostgreSQL" : undefined}
-                            >
-                              Забыли пароль?
-                            </button>
-                          )}
-                          {dbEngines.length === 1 && (
-                            <button
-                              type="button"
-                              className={cls("btnLink", uiLocked && "disabled")}
-                              onClick={onPickDbDir}
-                              disabled={uiLocked}
-                            >
-                              Добавить вторую СУБД по пути…
-                            </button>
-                          )}
+                          <div className="pgActions">
+                            {info?.postgresInstalled && (
+                              <button
+                                type="button"
+                                className={cls("btnLink", uiLocked && "disabled")}
+                                onClick={() => {
+                                  setShowResetModal(true);
+                                  setResetError("");
+                                  setNewPgPass("");
+                                  setNewPgPass2("");
+                                }}
+                                disabled={uiLocked || pgUser.trim().length === 0}
+                                title={pgUser.trim().length === 0 ? "Сначала укажите пользователя PostgreSQL" : undefined}
+                              >
+                                Забыли пароль?
+                              </button>
+                            )}
+                            {dbEngines.length === 1 && (
+                              <button
+                                type="button"
+                                className={cls("btnLink", uiLocked && "disabled")}
+                                onClick={onPickDbDir}
+                                disabled={uiLocked}
+                              >
+                                Добавить вторую СУБД по пути…
+                              </button>
+                            )}
+                          </div>
                         </div>
+                        {pgVerifyError && (
+                          <p className="pgRowError" title={pgVerifyError}>
+                            {pgVerifyError}
+                          </p>
+                        )}
                         {pgVerified && <p className="wizardHint wizardHintSuccess">Подключение и права подтверждены</p>}
                       </>
                     )}

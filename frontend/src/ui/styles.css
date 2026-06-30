@@ -435,19 +435,81 @@ textarea {
 
 .pgRow {
   display: flex;
-  gap: 18px;
   align-items: flex-start;
   margin-top: 12px;
   padding: 3px 0 6px;
 }
 
+.pgRow > .pgPasswordGroup + .pgActions {
+  margin-left: 18px;
+}
+
+@supports (gap: 1px) {
+  .pgRow {
+    gap: 18px;
+  }
+
+  .pgRow > .pgPasswordGroup + .pgActions {
+    margin-left: 0;
+  }
+}
+
 .pgPasswordGroup {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  flex: 1;
+  flex: 0 0 392px;
+  width: 392px;
+  max-width: 100%;
   min-width: 0;
   align-items: flex-start;
+}
+
+.pgPasswordGroup > .passwordField + .passwordField,
+.pgPasswordGroup > .wizardHint + .passwordField,
+.pgPasswordGroup > .passwordField + .btnLink {
+  margin-top: 10px;
+}
+
+@supports (gap: 1px) {
+  .pgPasswordGroup {
+    gap: 10px;
+  }
+
+  .pgPasswordGroup > .passwordField + .passwordField,
+  .pgPasswordGroup > .wizardHint + .passwordField,
+  .pgPasswordGroup > .passwordField + .btnLink {
+    margin-top: 0;
+  }
+}
+
+.pgActions {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.pgActions > .btnLink + .btnLink {
+  margin-left: 10px;
+}
+
+@supports (gap: 1px) {
+  .pgActions {
+    gap: 10px;
+  }
+
+  .pgActions > .btnLink + .btnLink {
+    margin-left: 0;
+  }
+}
+
+.pgRowError {
+  margin: 8px 0 0;
+  color: #f00020;
+  font-size: 14px;
+  line-height: 1.45;
+  max-width: 720px;
 }
 
 .pgPasswordGroup > .passwordField {
@@ -568,7 +630,7 @@ textarea {
   white-space: nowrap;
   cursor: pointer;
   transition: background var(--transition);
-  margin-left: auto;
+  flex: 0 0 auto;
 }
 
 .btnLink:hover:not(.disabled) {
