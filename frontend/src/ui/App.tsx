@@ -829,7 +829,7 @@ export const App: React.FC = () => {
                         <p className="wizardHint wizardHintError">
                           Не найдены PostgreSQL или Jatoba в стандартных путях.
                         </p>
-                        <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 10 }}>
+                        <div className="stack-v" style={{ marginTop: 12 }}>
                           {info?.os === "linux" ? (
                             pgPackageOptions.length > 0 ? (
                               <>
@@ -899,8 +899,8 @@ export const App: React.FC = () => {
                         <p className="wizardHint">
                           Укажите пользователя СУБД с правами суперпользователя — он нужен для создания ролей и инициализации базы данных.
                         </p>
-                        <div className="pgRow">
-                          <div className="pgPasswordGroup">
+                        <div className="pgCredentialGrid">
+                          <div className="pgCredentialLine">
                             <div className={cls("passwordField", pgVerified && "inputOk", pgVerifyError && "inputError")}>
                               <input
                                 className="input passwordInput"
@@ -919,6 +919,24 @@ export const App: React.FC = () => {
                                 autoComplete="username"
                               />
                             </div>
+                            {info?.postgresInstalled && (
+                              <button
+                                type="button"
+                                className={cls("btnLink", uiLocked && "disabled")}
+                                onClick={() => {
+                                  setShowResetModal(true);
+                                  setResetError("");
+                                  setNewPgPass("");
+                                  setNewPgPass2("");
+                                }}
+                                disabled={uiLocked || pgUser.trim().length === 0}
+                                title={pgUser.trim().length === 0 ? "Сначала укажите пользователя PostgreSQL" : undefined}
+                              >
+                                Забыли пароль?
+                              </button>
+                            )}
+                          </div>
+                          <div className="pgCredentialLine">
                             <div className={cls("passwordField", pgVerified && "inputOk", pgVerifyError && "inputError")}>
                               <input
                                 className="input passwordInput"
@@ -949,24 +967,6 @@ export const App: React.FC = () => {
                                 </svg>
                               </button>
                             </div>
-                          </div>
-                          <div className="pgActions">
-                            {info?.postgresInstalled && (
-                              <button
-                                type="button"
-                                className={cls("btnLink", uiLocked && "disabled")}
-                                onClick={() => {
-                                  setShowResetModal(true);
-                                  setResetError("");
-                                  setNewPgPass("");
-                                  setNewPgPass2("");
-                                }}
-                                disabled={uiLocked || pgUser.trim().length === 0}
-                                title={pgUser.trim().length === 0 ? "Сначала укажите пользователя PostgreSQL" : undefined}
-                              >
-                                Забыли пароль?
-                              </button>
-                            )}
                             {dbEngines.length === 1 && (
                               <button
                                 type="button"

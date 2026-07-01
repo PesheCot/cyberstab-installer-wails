@@ -44,10 +44,30 @@
   --transition: 150ms ease;
 }
 
+/* Vertical/horizontal stacks (gap + margin fallback via html.no-flex-gap) */
+.stack-v {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.stack-h {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
 html,
-body {
+body,
+#root {
   height: 100%;
   margin: 0;
+}
+
+body {
+  overflow: hidden;
   background: var(--bg-app);
   font-family: var(--font);
   color: var(--text-primary);
@@ -71,7 +91,8 @@ textarea {
 }
 
 .app {
-  height: 100vh;
+  height: 100%;
+  min-height: 100%;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -138,8 +159,9 @@ textarea {
   line-height: 1;
   cursor: pointer;
   transition: background var(--transition);
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   outline: none;
   border-radius: 2px;
 }
@@ -378,8 +400,9 @@ textarea {
   border-radius: 50%;
   border: none;
   background: #fff;
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   font-size: 14px;
   font-weight: 700;
   line-height: 1;
@@ -431,77 +454,32 @@ textarea {
   min-width: 0;
 }
 
-/* ——— PostgreSQL row ——— */
+/* ——— PostgreSQL credentials ——— */
 
-.pgRow {
+.pgCredentialGrid {
   display: flex;
-  align-items: flex-start;
+  flex-direction: column;
+  gap: 10px;
   margin-top: 12px;
   padding: 3px 0 6px;
 }
 
-.pgRow > .pgPasswordGroup + .pgActions {
-  margin-left: 18px;
-}
-
-@supports (gap: 1px) {
-  .pgRow {
-    gap: 18px;
-  }
-
-  .pgRow > .pgPasswordGroup + .pgActions {
-    margin-left: 0;
-  }
-}
-
-.pgPasswordGroup {
+.pgCredentialLine {
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 18px;
+}
+
+.pgCredentialLine .passwordField {
   flex: 0 0 392px;
   width: 392px;
   max-width: 100%;
-  min-width: 0;
-  align-items: flex-start;
 }
 
-.pgPasswordGroup > .passwordField + .passwordField,
-.pgPasswordGroup > .wizardHint + .passwordField,
-.pgPasswordGroup > .passwordField + .btnLink {
-  margin-top: 10px;
-}
-
-@supports (gap: 1px) {
-  .pgPasswordGroup {
-    gap: 10px;
-  }
-
-  .pgPasswordGroup > .passwordField + .passwordField,
-  .pgPasswordGroup > .wizardHint + .passwordField,
-  .pgPasswordGroup > .passwordField + .btnLink {
-    margin-top: 0;
-  }
-}
-
-.pgActions {
-  display: flex;
-  flex: 1;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  min-width: 0;
-}
-
-.pgActions > .btnLink + .btnLink {
-  margin-left: 10px;
-}
-
-@supports (gap: 1px) {
-  .pgActions {
-    gap: 10px;
-  }
-
-  .pgActions > .btnLink + .btnLink {
-    margin-left: 0;
-  }
+.pgCredentialLine .btnLink {
+  flex: 0 1 auto;
+  max-width: 100%;
 }
 
 .pgRowError {
@@ -510,6 +488,25 @@ textarea {
   font-size: 14px;
   line-height: 1.45;
   max-width: 720px;
+}
+
+/* Legacy aliases (uninstaller) */
+.pgRow {
+  display: flex;
+  align-items: flex-start;
+  margin-top: 12px;
+  padding: 3px 0 6px;
+}
+
+.pgPasswordGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 0 0 392px;
+  width: 392px;
+  max-width: 100%;
+  min-width: 0;
+  align-items: flex-start;
 }
 
 .pgPasswordGroup > .passwordField {
@@ -590,8 +587,9 @@ textarea {
   border: 0;
   background: transparent;
   color: #7a8795;
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
   padding: 0;
   flex-shrink: 0;
@@ -707,9 +705,13 @@ textarea {
 .radioRowOn .radioRowDot::after {
   content: "✓";
   position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: #fff;
   font-size: 17px;
   font-weight: 700;
@@ -1028,8 +1030,9 @@ textarea {
   width: 22px;
   height: 22px;
   border-radius: 4px;
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   font-size: 12px;
   font-weight: 700;
   background: #fff;
@@ -1152,7 +1155,10 @@ textarea {
 
 .modalOverlay {
   position: fixed;
-  inset: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
   background: rgba(0, 0, 0, 0.35);
   display: flex;
   align-items: center;
@@ -1445,6 +1451,148 @@ textarea {
     opacity: 1;
     transform: translateY(0);
   }
+}
+
+/* ——— Flex-gap fallbacks (html.no-flex-gap, legacy WebKitGTK) ——— */
+
+.no-flex-gap .stack-v > * + * {
+  margin-top: 10px;
+}
+
+.no-flex-gap .stack-h > * + * {
+  margin-left: 10px;
+}
+
+.no-flex-gap .topLeft > * + * {
+  margin-left: 10px;
+}
+
+.no-flex-gap .topWinButtons > * + * {
+  margin-left: 4px;
+}
+
+.no-flex-gap .optionChipRow {
+  margin: -6px 0;
+}
+
+.no-flex-gap .optionChipRow > * {
+  margin: 6px 12px 6px 0;
+}
+
+.no-flex-gap .optionChip > * + * {
+  margin-left: 8px;
+}
+
+.no-flex-gap .pathRow > * + * {
+  margin-left: 10px;
+}
+
+.no-flex-gap .pgCredentialGrid > * + * {
+  margin-top: 10px;
+}
+
+.no-flex-gap .pgCredentialLine > * + * {
+  margin-left: 18px;
+}
+
+.no-flex-gap .pgPasswordGroup > * + * {
+  margin-top: 10px;
+}
+
+.no-flex-gap .radioList > * + * {
+  margin-top: 12px;
+}
+
+.no-flex-gap .radioRow > * + * {
+  margin-left: 14px;
+}
+
+.no-flex-gap .restoreSqlRow > * + * {
+  margin-left: 24px;
+}
+
+.no-flex-gap .row > * + * {
+  margin-left: 10px;
+}
+
+.no-flex-gap .check > * + * {
+  margin-left: 8px;
+}
+
+.no-flex-gap .footerInner > * + * {
+  margin-left: 12px;
+}
+
+.no-flex-gap .footerRight > * + * {
+  margin-left: 10px;
+}
+
+.no-flex-gap .progressContent > * + * {
+  margin-left: 34px;
+}
+
+.no-flex-gap .progressContentDone {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+}
+
+.no-flex-gap .progressContentDone > * + * {
+  margin-left: 44px;
+}
+
+.no-flex-gap .steps > * + * {
+  margin-top: 15px;
+}
+
+.no-flex-gap .step {
+  display: flex;
+  align-items: center;
+}
+
+.no-flex-gap .step > * + * {
+  margin-left: 18px;
+}
+
+.no-flex-gap .doneOpenCheck > * + * {
+  margin-left: 10px;
+}
+
+.no-flex-gap .wizardFooter > * + * {
+  margin-left: 16px;
+}
+
+.no-flex-gap .grid > * + * {
+  margin-top: 16px;
+}
+
+.no-flex-gap .grid.dual > * + * {
+  margin-top: 0;
+  margin-left: 16px;
+}
+
+.no-flex-gap .managerActions {
+  margin: -6px 0;
+}
+
+.no-flex-gap .managerActions > * {
+  margin: 6px 12px 6px 0;
+}
+
+.no-flex-gap .serverRow > * + * {
+  margin-left: 12px;
+}
+
+.no-flex-gap .metaLine > * + * {
+  margin-left: 12px;
+}
+
+.no-flex-gap .metaLineStack > * + * {
+  margin-top: 8px;
+}
+
+.no-flex-gap .metaLineHead > * + * {
+  margin-left: 12px;
 }
 
 @media (max-width: 720px) {

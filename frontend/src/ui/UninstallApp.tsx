@@ -157,78 +157,82 @@ export const UninstallApp: React.FC = () => {
             </label>
 
             {!skipDB && (
-              <div className="pgRow uninstallPgRow">
-                <div className="pgPasswordGroup">
-                  {dbEngines.length === 1 && (
-                    <p className="wizardHint" style={{ margin: 0, width: "100%" }}>
-                      Найдена СУБД: <b>{dbEngines[0]?.kind === "jatoba" ? "Jatoba" : "PostgreSQL"}</b>.
-                    </p>
-                  )}
-                  <div className={cls("passwordField", errorText && "inputError")}>
-                    <input
-                      className="input passwordInput"
-                      type="text"
-                      value={pgUser}
-                      onChange={(e) => {
-                        setPgUser(e.target.value);
-                        setErrorText("");
-                      }}
-                      placeholder="Пользователь PostgreSQL"
-                      disabled={busy}
-                      autoComplete="username"
-                    />
+              <>
+                {dbEngines.length === 1 && (
+                  <p className="wizardHint" style={{ margin: "0 0 10px" }}>
+                    Найдена СУБД: <b>{dbEngines[0]?.kind === "jatoba" ? "Jatoba" : "PostgreSQL"}</b>.
+                  </p>
+                )}
+                <div className="pgCredentialGrid uninstallPgRow">
+                  <div className="pgCredentialLine">
+                    <div className={cls("passwordField", errorText && "inputError")}>
+                      <input
+                        className="input passwordInput"
+                        type="text"
+                        value={pgUser}
+                        onChange={(e) => {
+                          setPgUser(e.target.value);
+                          setErrorText("");
+                        }}
+                        placeholder="Пользователь PostgreSQL"
+                        disabled={busy}
+                        autoComplete="username"
+                      />
+                    </div>
                   </div>
-                  <div className={cls("passwordField", errorText && "inputError")}>
-                  <input
-                    className="input passwordInput"
-                    type={showPgPass ? "text" : "password"}
-                    value={pgPass}
-                    onChange={(e) => {
-                      setPgPass(e.target.value);
-                      setErrorText("");
-                    }}
-                    placeholder="Пароль"
-                    disabled={busy}
-                  />
-                  <button
-                    type="button"
-                    className="passwordEye"
-                    onClick={() => setShowPgPass((v) => !v)}
-                    disabled={busy}
-                    aria-label={showPgPass ? "Скрыть пароль" : "Показать пароль"}
-                  >
-                    <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
-                      <path d="M2.8 12s3.4-6 9.2-6 9.2 6 9.2 6-3.4 6-9.2 6-9.2-6-9.2-6Z" />
-                      <circle cx="12" cy="12" r="2.6" />
-                    </svg>
-                  </button>
-                </div>
-                  {dbEngines.length === 1 && (
-                    <button
-                      type="button"
-                      className={cls("btnLink", busy && "disabled")}
-                      onClick={async () => {
-                        try {
-                          const dir = await window.go.main.App.PickDbDir();
-                          if (!dir) return;
-                          const result = await window.go.main.App.CheckDbInstalled();
-                          const engines = (result?.engines || []) as Array<{ kind: "postgresql" | "jatoba"; label: string; binDir: string }>;
-                          setDbEngines(engines);
-                          if (engines.length > 1 && !dbEngineKind) {
-                            const preferred = engines.find((e) => e.kind === "postgresql")?.kind || engines[0].kind;
-                            setDbEngineKind(preferred);
+                  <div className="pgCredentialLine">
+                    <div className={cls("passwordField", errorText && "inputError")}>
+                      <input
+                        className="input passwordInput"
+                        type={showPgPass ? "text" : "password"}
+                        value={pgPass}
+                        onChange={(e) => {
+                          setPgPass(e.target.value);
+                          setErrorText("");
+                        }}
+                        placeholder="Пароль"
+                        disabled={busy}
+                      />
+                      <button
+                        type="button"
+                        className="passwordEye"
+                        onClick={() => setShowPgPass((v) => !v)}
+                        disabled={busy}
+                        aria-label={showPgPass ? "Скрыть пароль" : "Показать пароль"}
+                      >
+                        <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+                          <path d="M2.8 12s3.4-6 9.2-6 9.2 6 9.2 6-3.4 6-9.2 6-9.2-6-9.2-6Z" />
+                          <circle cx="12" cy="12" r="2.6" />
+                        </svg>
+                      </button>
+                    </div>
+                    {dbEngines.length === 1 && (
+                      <button
+                        type="button"
+                        className={cls("btnLink", busy && "disabled")}
+                        onClick={async () => {
+                          try {
+                            const dir = await window.go.main.App.PickDbDir();
+                            if (!dir) return;
+                            const result = await window.go.main.App.CheckDbInstalled();
+                            const engines = (result?.engines || []) as Array<{ kind: "postgresql" | "jatoba"; label: string; binDir: string }>;
+                            setDbEngines(engines);
+                            if (engines.length > 1 && !dbEngineKind) {
+                              const preferred = engines.find((e) => e.kind === "postgresql")?.kind || engines[0].kind;
+                              setDbEngineKind(preferred);
+                            }
+                          } catch (e: any) {
+                            setErrorText(String(e?.message || e));
                           }
-                        } catch (e: any) {
-                          setErrorText(String(e?.message || e));
-                        }
-                      }}
-                      disabled={busy}
-                    >
-                      Добавить вторую СУБД по пути…
-                    </button>
-                  )}
+                        }}
+                        disabled={busy}
+                      >
+                        Добавить вторую СУБД по пути…
+                      </button>
+                    )}
+                  </div>
                 </div>
-              </div>
+              </>
             )}
 
             {errorText && <p className="wizardHint wizardHintError uninstallMessage">{errorText}</p>}

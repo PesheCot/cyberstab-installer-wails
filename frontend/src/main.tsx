@@ -4,6 +4,9 @@ import { App as InstallerApp } from "./ui/App";
 import { UninstallApp } from "./ui/UninstallApp";
 import { ServerManagerApp } from "./ui/ServerManagerApp";
 import "./ui/styles.css";
+import { applyFlexGapClass } from "./ui/flexGap";
+
+applyFlexGapClass();
 
 declare global {
   interface Window {
