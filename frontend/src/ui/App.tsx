@@ -348,7 +348,10 @@ export const App: React.FC = () => {
 
   const onPickFolder = async () => {
     const p = await window.go.main.App.PickFolder();
-    if (p) setSourceRoot(p);
+    if (p) {
+      setSourceRoot(p);
+      setUsbError("");
+    }
   };
 
   const onPickInstallDir = async () => {
@@ -580,7 +583,7 @@ export const App: React.FC = () => {
     setUsbError("");
     if (uiLocked) return;
 
-    // Stage 0: mandatory USB check before proceeding.
+    // Stage 0: try auto-detect USB, but always allow proceeding (manual path on Linux step 0 / distro step).
     if (stage === 0) {
       setUsbChecking(true);
       try {
@@ -588,16 +591,21 @@ export const App: React.FC = () => {
         if (p) {
           setSourceRoot(p);
           setUsbError("");
-          setUsbChecking(false);
-          setStage(1);
+        } else if (!sourceRoot.trim()) {
+          setUsbError(
+            info?.os === "linux"
+              ? "Флешка не найдена автоматически. Укажите путь к папке с CyberstabServer*/CyberstabClient* ниже или на шаге «Дистрибутив»."
+              : "Флешка с дистрибутивом не найдена. Укажите путь вручную на шаге «Дистрибутив» или вставьте USB и нажмите «Далее» снова.",
+          );
         } else {
-          setUsbError("Флешка с дистрибутивом не найдена. Вставьте USB-накопитель с файлами CyberstabServer*/CyberstabClient* и попробуйте снова.");
-          setUsbChecking(false);
+          setUsbError("");
         }
       } catch {
-        setUsbError("Не удалось проверить USB-накопители.");
+        setUsbError("Не удалось проверить USB-накопители. Укажите путь к дистрибутиву вручную.");
+      } finally {
         setUsbChecking(false);
       }
+      setStage(1);
       return;
     }
 
@@ -816,6 +824,28 @@ export const App: React.FC = () => {
                           ? "Клиент будет выбран автоматически по разрядности системы (Windows64 на 64-bit)."
                           : "Клиент будет выбран автоматически (Linux64 на 64-bit)."}
                     </p>
+                    {info?.os === "linux" && (
+                      <>
+                        <p className="wizardHint" style={{ marginTop: 10 }}>
+                          Укажите папку с дистрибутивом (родительская для CyberstabServer* / CyberstabClient*). Если флешка не найдена автоматически — выберите путь вручную.
+                        </p>
+                        <div className="pathRow" style={{ marginTop: 8 }}>
+                          <input
+                            className="input"
+                            value={sourceRoot}
+                            onChange={(e) => {
+                              setSourceRoot(e.target.value);
+                              if (e.target.value.trim()) setUsbError("");
+                            }}
+                            placeholder="/media/user/USB/Cyberstab"
+                            disabled={uiLocked}
+                          />
+                          <button type="button" className="btnSecondary" onClick={onPickFolder} disabled={uiLocked}>
+                            Выбрать…
+                          </button>
+                        </div>
+                      </>
+                    )}
                     {usbError && <p className="wizardHint wizardHintError">{usbError}</p>}
                   </>
                 )}

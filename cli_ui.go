@@ -38,7 +38,7 @@ var (
 			Foreground(lipgloss.Color("#3A4A5C"))
 )
 
-const cliBuildTag = "2026-06-23-linux-universal"
+const cliBuildTag = "2026-06-18-uninstaller-parity"
 
 func printCLIBanner(title, subtitle string) {
 	fmt.Println()

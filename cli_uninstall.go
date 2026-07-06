@@ -4,8 +4,6 @@ package main
 
 import (
 	"fmt"
-
-	"github.com/charmbracelet/huh"
 )
 
 func runCLIUninstall(app *App) error {
@@ -15,7 +13,11 @@ func runCLIUninstall(app *App) error {
 
 	printCLIBanner("Удаление", "консольный режим")
 	cliHint("Будут удалены папка установки, база okidoci_db, роли okidoci_*/oki_*,")
-	cliHint("задачи автозапуска и ярлыки. Сам PostgreSQL не удаляется.")
+	if isWindows() {
+		cliHint("задачи планировщика и ярлыки. Сам PostgreSQL не удаляется.")
+	} else {
+		cliHint("служба systemd cyberstab-server и ярлыки .desktop. Сам PostgreSQL не удаляется.")
+	}
 
 	installDir := defaultInstallDir()
 	if isWindows() {
@@ -50,21 +52,7 @@ func runCLIUninstall(app *App) error {
 			cliWarn("СУБД не найдена — очистка БД будет пропущена.")
 			skipDB = true
 		} else {
-			engines := result.Engines
-			if len(engines) > 1 {
-				opts := make([]huh.Option[string], len(engines))
-				for i, e := range engines {
-					opts[i] = huh.NewOption(fmt.Sprintf("%s (%s)", e.Label, e.BinDir), e.Kind)
-				}
-				kind, err := promptSelect("Выберите движок СУБД", opts, engines[0].Kind)
-				if err != nil {
-					return err
-				}
-				dbEngine = kind
-			} else if len(engines) == 1 {
-				dbEngine = engines[0].Kind
-			}
-			pgUser, pgPass, err = promptPostgresCredentialsUninstall(app)
+			dbEngine, pgUser, pgPass, err = selectInstalledEngineUninstall(app, result)
 			if err != nil {
 				if err.Error() == "skip_db" {
 					skipDB = true
@@ -78,7 +66,11 @@ func runCLIUninstall(app *App) error {
 	printCLISection("Подтверждение")
 	cliSummaryLine("Папка", installDir)
 	if skipDB {
-		cliSummaryLine("БД", "пропуск")
+		if isWindows() {
+			cliSummaryLine("БД", "пропуск (только файлы)")
+		} else {
+			cliSummaryLine("БД", "пропуск (только файлы и службы)")
+		}
 	} else {
 		cliSummaryLine("БД", "удалить okidoci_db и роли")
 	}

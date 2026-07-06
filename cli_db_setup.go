@@ -111,6 +111,24 @@ func promptDatabaseSetup(app *App, sourceRoot string) (dbEngine, pgUser, pgPass 
 }
 
 func selectInstalledEngine(app *App, result DbCheckResult) (dbEngine, pgUser, pgPass string, err error) {
+	dbEngine, err = pickAndActivateDbEngine(app, result)
+	if err != nil {
+		return "", "", "", err
+	}
+	pgUser, pgPass, err = promptPostgresCredentials(app)
+	return dbEngine, pgUser, pgPass, err
+}
+
+func selectInstalledEngineUninstall(app *App, result DbCheckResult) (dbEngine, pgUser, pgPass string, err error) {
+	dbEngine, err = pickAndActivateDbEngine(app, result)
+	if err != nil {
+		return "", "", "", err
+	}
+	pgUser, pgPass, err = promptPostgresCredentialsUninstall(app)
+	return dbEngine, pgUser, pgPass, err
+}
+
+func pickAndActivateDbEngine(app *App, result DbCheckResult) (dbEngine string, err error) {
 	engines := result.Engines
 	if len(engines) > 1 {
 		opts := make([]huh.Option[string], len(engines))
@@ -119,7 +137,7 @@ func selectInstalledEngine(app *App, result DbCheckResult) (dbEngine, pgUser, pg
 		}
 		binDir, err := promptSelect("Выберите движок СУБД", opts, engines[0].BinDir)
 		if err != nil {
-			return "", "", "", err
+			return "", err
 		}
 		_ = app.SelectDbEngineBin(binDir)
 		for _, e := range engines {
@@ -133,7 +151,5 @@ func selectInstalledEngine(app *App, result DbCheckResult) (dbEngine, pgUser, pg
 		cliSummaryLine("СУБД", engines[0].Label)
 		_ = app.SelectDbEngineBin(engines[0].BinDir)
 	}
-
-	pgUser, pgPass, err = promptPostgresCredentials(app)
-	return dbEngine, pgUser, pgPass, err
+	return dbEngine, nil
 }
