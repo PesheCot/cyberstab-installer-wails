@@ -290,7 +290,7 @@ export const UninstallApp: React.FC = () => {
         </div>
       </div>
 
-      <div className="content">
+      <div className="content uninstallContent">
         <div className="wizardPanel uninstallPanel">
           <div className="wizardHead">
             <div>
@@ -436,7 +436,7 @@ export const UninstallApp: React.FC = () => {
         </div>
       </div>
 
-      <div className="footerBar">
+      <div className="footerBar uninstallFooterBar">
         <div className="footerInner">
           <button type="button" className={cls("btnPrimary", busy && "disabled")} onClick={() => window.runtime.Quit()} disabled={busy}>
             Отмена

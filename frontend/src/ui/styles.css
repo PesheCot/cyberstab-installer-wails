@@ -1395,16 +1395,31 @@ textarea {
 /* ——— Uninstaller ——— */
 
 .uninstallPanel {
-  min-height: 392px;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  padding-bottom: 14px;
+}
+
+.uninstallContent {
+  min-height: 0;
+  overflow: hidden;
+  padding-bottom: 10px;
+}
+
+.uninstallPanel .wizardBody {
+  overflow-y: auto;
+  overflow-x: visible;
+  padding: 6px 12px 14px;
 }
 
 .uninstallLead {
   max-width: 720px;
-  margin-bottom: 18px;
+  margin-bottom: 14px;
 }
 
 .uninstallSectionTitle {
-  margin: 16px 0 10px;
+  margin: 14px 0 8px;
   font-size: 18px;
   line-height: 1.2;
   font-weight: 700;
@@ -1425,17 +1440,38 @@ textarea {
 .uninstallToggle {
   width: 584px;
   max-width: 100%;
-  margin-bottom: 14px;
+  margin-bottom: 10px;
 }
 
 .uninstallPgRow {
-  padding: 3px 0 6px;
+  margin-top: 8px;
+  padding: 2px 0 4px;
 }
 
 .uninstallMessage {
-  margin-top: 12px;
+  margin-top: 10px;
   max-width: 720px;
   white-space: pre-wrap;
+}
+
+.uninstallPanel .radioList {
+  margin-top: 6px;
+  margin-bottom: 8px;
+}
+
+.uninstallPanel .radioRow {
+  min-height: 34px;
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+
+.uninstallPanel .pgCredentialGrid {
+  margin-top: 10px;
+}
+
+.uninstallFooterBar {
+  padding-top: 10px;
+  background: var(--bg-app);
 }
 
 .animatedStep {
