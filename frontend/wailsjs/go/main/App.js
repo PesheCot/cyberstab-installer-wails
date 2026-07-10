@@ -6,6 +6,10 @@ export function AutoDetectSourceRoot(arg1, arg2) {
   return window['go']['main']['App']['AutoDetectSourceRoot'](arg1, arg2);
 }
 
+export function BackupServerDatabase(arg1) {
+  return window['go']['main']['App']['BackupServerDatabase'](arg1);
+}
+
 export function BeforeClose(arg1) {
   return window['go']['main']['App']['BeforeClose'](arg1);
 }
@@ -22,8 +26,28 @@ export function CheckInstallDirConflict(arg1) {
   return window['go']['main']['App']['CheckInstallDirConflict'](arg1);
 }
 
+export function CheckInternet() {
+  return window['go']['main']['App']['CheckInternet']();
+}
+
+export function CheckNextcloudServerUpdate(arg1, arg2, arg3) {
+  return window['go']['main']['App']['CheckNextcloudServerUpdate'](arg1, arg2, arg3);
+}
+
+export function CheckNextcloudServerUpdateWithSaved(arg1) {
+  return window['go']['main']['App']['CheckNextcloudServerUpdateWithSaved'](arg1);
+}
+
 export function CheckOkidociDB(arg1, arg2) {
   return window['go']['main']['App']['CheckOkidociDB'](arg1, arg2);
+}
+
+export function DisconnectAllServerUsers(arg1) {
+  return window['go']['main']['App']['DisconnectAllServerUsers'](arg1);
+}
+
+export function DisconnectServerUser(arg1, arg2) {
+  return window['go']['main']['App']['DisconnectServerUser'](arg1, arg2);
 }
 
 export function DomReady(arg1) {
@@ -34,6 +58,10 @@ export function GetAppInfo() {
   return window['go']['main']['App']['GetAppInfo']();
 }
 
+export function GetNextcloudSavedLogin() {
+  return window['go']['main']['App']['GetNextcloudSavedLogin']();
+}
+
 export function GetServerInfo(arg1, arg2) {
   return window['go']['main']['App']['GetServerInfo'](arg1, arg2);
 }
@@ -42,8 +70,16 @@ export function GetServerStatus(arg1) {
   return window['go']['main']['App']['GetServerStatus'](arg1);
 }
 
+export function GetServerUpdateTarget(arg1) {
+  return window['go']['main']['App']['GetServerUpdateTarget'](arg1);
+}
+
 export function GetUIMode() {
   return window['go']['main']['App']['GetUIMode']();
+}
+
+export function GetUpdateSourceConfig() {
+  return window['go']['main']['App']['GetUpdateSourceConfig']();
 }
 
 export function Greet(arg1) {
@@ -78,6 +114,14 @@ export function PickSqlFile() {
   return window['go']['main']['App']['PickSqlFile']();
 }
 
+export function PickUpdateArchive() {
+  return window['go']['main']['App']['PickUpdateArchive']();
+}
+
+export function PickUpdateFolder() {
+  return window['go']['main']['App']['PickUpdateFolder']();
+}
+
 export function PreviewInstallDone() {
   return window['go']['main']['App']['PreviewInstallDone']();
 }
@@ -88,6 +132,26 @@ export function ResetPostgresPassword(arg1, arg2) {
 
 export function RestartServer(arg1) {
   return window['go']['main']['App']['RestartServer'](arg1);
+}
+
+export function RevealPathInExplorer(arg1) {
+  return window['go']['main']['App']['RevealPathInExplorer'](arg1);
+}
+
+export function RunServerUpdateFromNextcloud(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['RunServerUpdateFromNextcloud'](arg1, arg2, arg3, arg4, arg5);
+}
+
+export function RunServerUpdateFromNextcloudSaved(arg1, arg2) {
+  return window['go']['main']['App']['RunServerUpdateFromNextcloudSaved'](arg1, arg2);
+}
+
+export function RunServerUpdateFromPath(arg1, arg2, arg3) {
+  return window['go']['main']['App']['RunServerUpdateFromPath'](arg1, arg2, arg3);
+}
+
+export function SaveNextcloudCredentials(arg1, arg2, arg3) {
+  return window['go']['main']['App']['SaveNextcloudCredentials'](arg1, arg2, arg3);
 }
 
 export function SelectDbEngine(arg1) {
@@ -106,8 +170,8 @@ export function StartInstall(arg1) {
   return window['go']['main']['App']['StartInstall'](arg1);
 }
 
-export function StartServer() {
-  return window['go']['main']['App']['StartServer']();
+export function StartServer(arg1) {
+  return window['go']['main']['App']['StartServer'](arg1);
 }
 
 export function StopServer(arg1) {

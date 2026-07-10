@@ -13,16 +13,12 @@ import (
 )
 
 type ServerStatus struct {
-	TaskExists bool
-	Running    bool
-	Raw        string
-}
-
-type ServerConsoleInfo struct {
-	ConnectionsText string
-	VersionText     string
-	SessionCount    int
-	RawOutput       string
+	TaskExists     bool
+	Running        bool
+	Raw            string
+	NetworkPort    int
+	ManagementPort int
+	PropertiesPath string
 }
 
 // NOTE: These names are project-specific; adjust if your scheduled task names differ.
@@ -54,21 +50,6 @@ func taskkillBestEffort(imageName string) error {
 	}
 	_, _ = runCmd(12*time.Second, "taskkill.exe", "/F", "/IM", imageName, "/T")
 	return nil
-}
-
-func QueryServerConsoleInfo(installDir string, pgPassword string) (ServerConsoleInfo, error) {
-	// Best-effort: try to run an existing console tool if present.
-	// If your distribution has a different exe name/path, adjust here.
-	exe := filepath.Join(installDir, "serverconsole", "serverconsole.exe")
-	if runtime.GOOS != "windows" {
-		exe = filepath.Join(installDir, "serverconsole", "serverconsole")
-	}
-	if _, err := os.Stat(exe); err != nil {
-		return ServerConsoleInfo{}, fmt.Errorf("serverconsole not found: %s", exe)
-	}
-	out, err := runCmd(8*time.Second, exe, "--info")
-	// We don't parse much here; keep raw for UI.
-	return ServerConsoleInfo{RawOutput: out}, err
 }
 
 func removeCyberstabInstallerArtifactsWindows() error {

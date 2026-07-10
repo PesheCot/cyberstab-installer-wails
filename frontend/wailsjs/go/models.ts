@@ -16,6 +16,26 @@ export namespace main {
 	        this.postgresInstalled = source["postgresInstalled"];
 	    }
 	}
+	export class DatabaseBackupResultDTO {
+	    success: boolean;
+	    path: string;
+	    message: string;
+	    serverRestarted: boolean;
+	    log?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DatabaseBackupResultDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.path = source["path"];
+	        this.message = source["message"];
+	        this.serverRestarted = source["serverRestarted"];
+	        this.log = source["log"];
+	    }
+	}
 	export class DbEngineDTO {
 	    kind: string;
 	    label: string;
@@ -87,6 +107,26 @@ export namespace main {
 	        this.exists = source["exists"];
 	    }
 	}
+	export class NextcloudUpdateCheckDTO {
+	    currentVersion: string;
+	    remoteVersion: string;
+	    updateRequired: boolean;
+	    archiveName: string;
+	    message: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new NextcloudUpdateCheckDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.currentVersion = source["currentVersion"];
+	        this.remoteVersion = source["remoteVersion"];
+	        this.updateRequired = source["updateRequired"];
+	        this.archiveName = source["archiveName"];
+	        this.message = source["message"];
+	    }
+	}
 	export class OkidociCheckResult {
 	    exists: boolean;
 	
@@ -115,10 +155,35 @@ export namespace main {
 	        this.version = source["version"];
 	    }
 	}
+	export class ServerSessionDTO {
+	    userId: number;
+	    login: string;
+	    username: string;
+	    ip: string;
+	    company: string;
+	    module: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ServerSessionDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.userId = source["userId"];
+	        this.login = source["login"];
+	        this.username = source["username"];
+	        this.ip = source["ip"];
+	        this.company = source["company"];
+	        this.module = source["module"];
+	    }
+	}
 	export class ServerStatusDTO {
 	    taskExists: boolean;
 	    running: boolean;
 	    raw?: string;
+	    networkPort: number;
+	    managementPort: number;
+	    propertiesPath?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new ServerStatusDTO(source);
@@ -129,15 +194,16 @@ export namespace main {
 	        this.taskExists = source["taskExists"];
 	        this.running = source["running"];
 	        this.raw = source["raw"];
+	        this.networkPort = source["networkPort"];
+	        this.managementPort = source["managementPort"];
+	        this.propertiesPath = source["propertiesPath"];
 	    }
 	}
 	export class ServerInfoDTO {
 	    status: ServerStatusDTO;
-	    connections?: string;
+	    sessions: ServerSessionDTO[];
 	    version?: string;
 	    sessionCount: number;
-	    consoleErr?: string;
-	    rawConsole?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new ServerInfoDTO(source);
@@ -146,11 +212,9 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.status = this.convertValues(source["status"], ServerStatusDTO);
-	        this.connections = source["connections"];
+	        this.sessions = this.convertValues(source["sessions"], ServerSessionDTO);
 	        this.version = source["version"];
 	        this.sessionCount = source["sessionCount"];
-	        this.consoleErr = source["consoleErr"];
-	        this.rawConsole = source["rawConsole"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -172,6 +236,39 @@ export namespace main {
 		}
 	}
 	
+	
+	export class ServerUpdateResultDTO {
+	    success: boolean;
+	    message: string;
+	    archivePath?: string;
+	    log?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ServerUpdateResultDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.message = source["message"];
+	        this.archivePath = source["archivePath"];
+	        this.log = source["log"];
+	    }
+	}
+	export class ServerUpdateTargetDTO {
+	    platform: string;
+	    archiveName: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ServerUpdateTargetDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.platform = source["platform"];
+	        this.archiveName = source["archiveName"];
+	    }
+	}
 	export class SourceValidationResult {
 	    valid: boolean;
 	    missing: string[];
@@ -236,6 +333,24 @@ export namespace main {
 	        this.postgresUser = source["postgresUser"];
 	        this.postgresPassword = source["postgresPassword"];
 	        this.skipDB = source["skipDB"];
+	    }
+	}
+	export class UpdateSourceConfigDTO {
+	    baseURL: string;
+	    updatesFolder: string;
+	    configPath: string;
+	    configured: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new UpdateSourceConfigDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.baseURL = source["baseURL"];
+	        this.updatesFolder = source["updatesFolder"];
+	        this.configPath = source["configPath"];
+	        this.configured = source["configured"];
 	    }
 	}
 

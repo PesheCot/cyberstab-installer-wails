@@ -43,21 +43,41 @@ func removeCyberstabLinuxArtifacts(installDir string) {
 	_ = installDir
 }
 
-func QueryServerStatus() (ServerStatus, error) {
+func QueryServerStatus(installDir string) (ServerStatus, error) {
+	installDir = installDirOrDefault(installDir)
+	ports := LoadServerPorts(installDir)
+
 	out, err := runCmd(5*time.Second, "systemctl", "is-active", linuxServiceUnit)
 	raw := strings.TrimSpace(out)
-	running := err == nil && raw == "active"
-	if !running {
+	serviceActive := err == nil && raw == "active"
+	if !serviceActive {
 		if out2, err2 := runCmd(5*time.Second, "systemctl", "status", linuxServiceUnit); err2 == nil {
 			raw = strings.TrimSpace(out2)
 		}
 	}
 	exists := !strings.Contains(strings.ToLower(raw), "could not be found") &&
 		!strings.Contains(strings.ToLower(raw), "not-found")
-	return ServerStatus{TaskExists: exists, Running: running, Raw: raw}, nil
+
+	portOpen := isLocalTCPPortOpen(ports.NetworkPort, 500*time.Millisecond)
+	running := portOpen || serviceActive
+	if portOpen {
+		raw = fmt.Sprintf("network.portnumber=%d: listening\n%s", ports.NetworkPort, raw)
+	} else {
+		raw = fmt.Sprintf("network.portnumber=%d: not listening\n%s", ports.NetworkPort, raw)
+	}
+
+	return ServerStatus{
+		TaskExists:     exists,
+		Running:        running,
+		Raw:            raw,
+		NetworkPort:    ports.NetworkPort,
+		ManagementPort: ports.ManagementPort,
+		PropertiesPath: ports.PropertiesPath,
+	}, nil
 }
 
-func StartServer() error {
+func StartServer(installDir string) error {
+	_ = installDir
 	_, err := runCmd(15*time.Second, "systemctl", "start", linuxServiceUnit)
 	return err
 }

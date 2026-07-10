@@ -74,50 +74,99 @@ func (a *App) CancelInstall() error {
 }
 
 type ServerStatusDTO struct {
-	TaskExists bool   `json:"taskExists"`
-	Running    bool   `json:"running"`
-	Raw        string `json:"raw,omitempty"`
+	TaskExists     bool   `json:"taskExists"`
+	Running        bool   `json:"running"`
+	Raw            string `json:"raw,omitempty"`
+	NetworkPort    int    `json:"networkPort"`
+	ManagementPort int    `json:"managementPort"`
+	PropertiesPath string `json:"propertiesPath,omitempty"`
+}
+
+type ServerSessionDTO struct {
+	UserID   int    `json:"userId"`
+	Login    string `json:"login"`
+	Username string `json:"username"`
+	IP       string `json:"ip"`
+	Company  string `json:"company"`
+	Module   string `json:"module"`
 }
 
 type ServerInfoDTO struct {
-	Status       ServerStatusDTO `json:"status"`
-	Connections  string          `json:"connections,omitempty"`
-	Version      string          `json:"version,omitempty"`
-	SessionCount int             `json:"sessionCount"` // без omitempty: 0 — валидное значение
-	ConsoleErr   string          `json:"consoleErr,omitempty"`
-	RawConsole   string          `json:"rawConsole,omitempty"`
+	Status       ServerStatusDTO    `json:"status"`
+	Sessions     []ServerSessionDTO `json:"sessions"`
+	Version      string             `json:"version,omitempty"`
+	SessionCount int                `json:"sessionCount"`
 }
 
 func (a *App) GetServerStatus(installDir string) (ServerStatusDTO, error) {
-	st, err := system.QueryServerStatus()
-	return ServerStatusDTO{TaskExists: st.TaskExists, Running: st.Running, Raw: st.Raw}, err
+	if strings.TrimSpace(installDir) == "" {
+		installDir = system.DefaultInstallDir
+	}
+	st, err := system.QueryServerStatus(installDir)
+	return ServerStatusDTO{
+		TaskExists:     st.TaskExists,
+		Running:        st.Running,
+		Raw:            st.Raw,
+		NetworkPort:    st.NetworkPort,
+		ManagementPort: st.ManagementPort,
+		PropertiesPath: st.PropertiesPath,
+	}, err
 }
 
 func (a *App) GetServerInfo(installDir string, pgPassword string) (ServerInfoDTO, error) {
+	_ = pgPassword
 	st, err := a.GetServerStatus(installDir)
-	info := ServerInfoDTO{Status: st}
-	if err != nil {
-		return info, err
+	info := ServerInfoDTO{
+		Status:  st,
+		Version: system.ReadInstalledServerVersion(installDir),
 	}
-	// Only query console when the autostart task exists (best-effort).
-	if st.TaskExists {
-		if strings.TrimSpace(installDir) == "" {
-			installDir = system.DefaultInstallDir
-		}
-		c, cerr := system.QueryServerConsoleInfo(installDir, pgPassword)
-		info.Connections = strings.TrimSpace(c.ConnectionsText)
-		info.Version = strings.TrimSpace(c.VersionText)
-		info.SessionCount = c.SessionCount
-		info.RawConsole = c.RawOutput
-		if cerr != nil {
-			info.ConsoleErr = cerr.Error()
+	if st.Running {
+		if live, liveErr := system.QueryServerLiveInfo(installDir); liveErr == nil {
+			info.SessionCount = live.SessionCount()
+			info.Sessions = mapServerSessions(live.Sessions)
 		}
 	}
-	return info, nil
+	return info, err
 }
 
-func (a *App) StartServer() error {
-	return system.StartServer()
+func mapServerSessions(in []system.ServerSession) []ServerSessionDTO {
+	out := make([]ServerSessionDTO, 0, len(in))
+	for _, s := range in {
+		out = append(out, ServerSessionDTO{
+			UserID:   s.UserID,
+			Login:    s.Login,
+			Username: s.Username,
+			IP:       s.IP,
+			Company:  s.Company,
+			Module:   s.Module,
+		})
+	}
+	return out
+}
+
+func (a *App) DisconnectServerUser(installDir string, userID int) error {
+	if strings.TrimSpace(installDir) == "" {
+		installDir = system.DefaultInstallDir
+	}
+	return system.DisconnectServerUser(installDir, userID)
+}
+
+func (a *App) DisconnectAllServerUsers(installDir string) error {
+	if strings.TrimSpace(installDir) == "" {
+		installDir = system.DefaultInstallDir
+	}
+	return system.DisconnectAllServerUsers(installDir)
+}
+
+func (a *App) CheckInternet() bool {
+	return system.HasInternetAccess()
+}
+
+func (a *App) StartServer(installDir string) error {
+	if strings.TrimSpace(installDir) == "" {
+		installDir = system.DefaultInstallDir
+	}
+	return system.StartServer(installDir)
 }
 
 func (a *App) StopServer(installDir string) error {
@@ -132,7 +181,7 @@ func (a *App) RestartServer(installDir string) error {
 		return err
 	}
 	time.Sleep(800 * time.Millisecond)
-	return a.StartServer()
+	return a.StartServer(installDir)
 }
 
 // StartInstallOptions contains all options needed to start an installation.

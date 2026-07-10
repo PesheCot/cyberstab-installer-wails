@@ -47,10 +47,14 @@ func main() {
 
 	err := wails.Run(&options.App{
 		Title:         "Киберстаб — управление сервером",
-		Width:         860,
-		Height:        520,
-		DisableResize: true,
+		Width:         900,
+		Height:        600,
+		MinWidth:      640,
+		MinHeight:     480,
+		DisableResize: false,
 		Frameless:     true,
+		CSSDragProperty: "--wails-draggable",
+		CSSDragValue:    "drag",
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},

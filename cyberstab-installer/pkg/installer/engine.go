@@ -1,6 +1,7 @@
 package installer
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
@@ -870,14 +871,14 @@ func runDbUpdaterBestEffort(opts dbUpdaterRunOptions, emit func(pct int, status 
 		if emit != nil {
 			emit(10, "Восстановление БД из .sql…")
 		}
-		if err := runDbUpdaterOnce(dbu, installDir, []string{"-qr", opts.RestoreSQL}, opts.PGUser, opts.PGPassword, emit, 2*time.Hour, "Восстановление БД…", opts.Cancel); err != nil {
+		if err := runDbUpdaterOnce(dbu, installDir, []string{"-qr", opts.RestoreSQL}, opts.PGUser, opts.PGPassword, emit, 2*time.Hour, "Восстановление БД…", 50, opts.Cancel); err != nil {
 			return err
 		}
 		// After restore, apply updates.
 		if emit != nil {
 			emit(60, "Применение обновлений БД…")
 		}
-		return runDbUpdaterOnce(dbu, installDir, []string{"-qu"}, opts.PGUser, opts.PGPassword, emit, 2*time.Hour, "Обновление БД…", opts.Cancel)
+		return runDbUpdaterOnce(dbu, installDir, []string{"-qu"}, opts.PGUser, opts.PGPassword, emit, 2*time.Hour, "Обновление БД…", 100, opts.Cancel)
 	}
 
 	// Default/new/recreate: run update (-qu).
@@ -886,10 +887,10 @@ func runDbUpdaterBestEffort(opts dbUpdaterRunOptions, emit func(pct int, status 
 	}
 
 	// Run dbupdater - it will create database and roles from scratch
-	return runDbUpdaterOnce(dbu, installDir, []string{"-qu"}, opts.PGUser, opts.PGPassword, emit, 2*time.Hour, "Инициализация БД…", opts.Cancel)
+	return runDbUpdaterOnce(dbu, installDir, []string{"-qu"}, opts.PGUser, opts.PGPassword, emit, 2*time.Hour, "Инициализация БД…", 100, opts.Cancel)
 }
 
-func runDbUpdaterOnce(exePath string, installDir string, args []string, pgUser, pgPassword string, emit func(pct int, status string), timeout time.Duration, tickStatus string, cancel <-chan struct{}) error {
+func runDbUpdaterOnce(exePath string, installDir string, args []string, pgUser, pgPassword string, emit func(pct int, status string), timeout time.Duration, tickStatus string, successPct int, cancel <-chan struct{}) error {
 	cmd := exec.Command(exePath, args...)
 	cmd.Dir = filepath.Dir(exePath)
 	cmd.Env = os.Environ()
@@ -902,9 +903,13 @@ func runDbUpdaterOnce(exePath string, installDir string, args []string, pgUser, 
 	if runtime.GOOS == "windows" {
 		hideCmd(cmd)
 	}
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
+
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("dbupdater: stdout pipe: %w", err)
+	}
+	var stderrBuf bytes.Buffer
+	cmd.Stderr = &stderrBuf
 
 	// dbupdater requires server.properties in its working directory.
 	if err := ensureDbUpdaterServerProperties(installDir, cmd.Dir); err != nil {
@@ -922,41 +927,109 @@ func runDbUpdaterOnce(exePath string, installDir string, args []string, pgUser, 
 	registerInstallerProcess(cmd.Process)
 	defer unregisterInstallerProcess(cmd.Process)
 
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
+	lineCh := make(chan string, 32)
+	var outMu sync.Mutex
+	var out bytes.Buffer
+	enc := dbUpdaterOutputEncoding()
+	go func() {
+		defer close(lineCh)
+		reader := enc.NewDecoder().Reader(stdoutPipe)
+		scanner := bufio.NewScanner(reader)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		for scanner.Scan() {
+			line := scanner.Text()
+			outMu.Lock()
+			out.WriteString(line)
+			out.WriteByte('\n')
+			outMu.Unlock()
+			lineCh <- line
+		}
+	}()
 
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-	start := time.Now()
-
-	for {
-		select {
-		case err := <-done:
-			if err != nil {
-				return fmt.Errorf("dbupdater: ошибка: %v\n%s", err, strings.TrimSpace(out.String()))
+	var protocolErrors []string
+	var result string
+	hasResult := false
+	lastPct := -1
+	handleLine := func(line string) {
+		msg, parsed := parseDbUpdaterLine(line)
+		if !parsed {
+			return
+		}
+		switch msg.Kind {
+		case dbUpdaterLineState:
+			if pct, ok := dbUpdaterProgressPercent(msg.Payload); ok && emit != nil && pct != lastPct {
+				lastPct = pct
+				emit(pct, tickStatus)
 			}
-			return nil
+		case dbUpdaterLineError:
+			if strings.TrimSpace(msg.Payload) != "" {
+				protocolErrors = append(protocolErrors, msg.Payload)
+			}
+		case dbUpdaterLineResult:
+			result = strings.TrimSpace(msg.Payload)
+			hasResult = true
+		}
+	}
+
+	waitCh := make(chan error, 1)
+	go func() { waitCh <- cmd.Wait() }()
+	deadline := time.Now().Add(timeout)
+
+	var runErr error
+	finished := false
+	for !finished {
+		if time.Now().After(deadline) {
+			killProcessTree(cmd.Process)
+			return fmt.Errorf("dbupdater: timeout (%s)", timeout.String())
+		}
+		select {
+		case line, ok := <-lineCh:
+			if ok {
+				handleLine(line)
+			}
+		case runErr = <-waitCh:
+			finished = true
 		case <-cancel:
 			killProcessTree(cmd.Process)
 			return fmt.Errorf("dbupdater: отменено пользователем")
-		case <-ticker.C:
-			if emit != nil {
-				el := time.Since(start)
-				pct := int(el.Seconds() * 99 / timeout.Seconds())
-				if pct < 1 {
-					pct = 1
-				}
-				if pct > 99 {
-					pct = 99
-				}
-				emit(pct, tickStatus)
-			}
-			if time.Since(start) > timeout {
-				_ = cmd.Process.Kill()
-				return fmt.Errorf("dbupdater: timeout (%s)", timeout.String())
-			}
 		}
 	}
+	for line := range lineCh {
+		handleLine(line)
+	}
+
+	outMu.Lock()
+	outText := strings.TrimSpace(out.String())
+	outMu.Unlock()
+	if stderrText := strings.TrimSpace(stderrBuf.String()); stderrText != "" {
+		if outText != "" {
+			outText += "\n"
+		}
+		outText += stderrText
+	}
+
+	if runErr != nil {
+		if outText != "" {
+			return fmt.Errorf("dbupdater: ошибка: %v\n%s", runErr, outText)
+		}
+		return fmt.Errorf("dbupdater: ошибка: %w", runErr)
+	}
+	if !dbUpdaterFinishedSuccessfully(protocolErrors, result, hasResult) {
+		if len(protocolErrors) > 0 {
+			return fmt.Errorf("dbupdater: %s", strings.Join(protocolErrors, "; "))
+		}
+		if hasResult {
+			return fmt.Errorf("dbupdater: завершился с ошибкой (result=%s)", result)
+		}
+		if outText != "" {
+			return fmt.Errorf("dbupdater: не получен результат выполнения\n%s", outText)
+		}
+		return fmt.Errorf("dbupdater: не получен результат выполнения")
+	}
+	if emit != nil && successPct > 0 && successPct != lastPct {
+		emit(successPct, tickStatus)
+	}
+	return nil
 }
 
 func ensureDbUpdaterServerProperties(installDir string, dbUpdaterDir string) error {

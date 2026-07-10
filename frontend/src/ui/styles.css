@@ -1227,10 +1227,315 @@ textarea {
   flex: 1;
 }
 
-/* ——— Server manager (unchanged structure) ——— */
+/* ——— Server manager ——— */
+
+.managerInternetBanner {
+  margin: 0 34px;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid #f5d9a8;
+  background: #fff8e8;
+  color: #8a5b00;
+  font-size: 13px;
+  line-height: 1.35;
+  flex-shrink: 0;
+}
+
+.managerApp .managerContent {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  padding: 22px 34px 14px;
+  display: flex;
+  flex-direction: column;
+}
+
+.managerScroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 4px;
+  padding-bottom: 8px;
+}
 
 .managerGrid {
   max-width: 900px;
+}
+
+.managerTabs {
+  display: flex;
+  gap: 8px;
+  padding: 12px 34px 0;
+  flex-shrink: 0;
+}
+
+.managerTab {
+  height: 36px;
+  padding: 0 16px;
+  border: 1px solid var(--border-light);
+  border-bottom: 0;
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  background: #eef1f5;
+  color: var(--text-muted);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.managerTab.active {
+  background: #fff;
+  color: var(--text-primary);
+  position: relative;
+  z-index: 1;
+}
+
+.usersCardHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.usersCardHead .btnDanger {
+  width: auto;
+  min-width: 150px;
+  flex-shrink: 0;
+}
+
+.usersEmpty {
+  padding: 28px 16px;
+  text-align: center;
+  color: var(--text-muted);
+  background: #f3f6f9;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+}
+
+.usersTableWrap {
+  overflow-x: auto;
+}
+
+.usersTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.usersTable th,
+.usersTable td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-light);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.usersTable th {
+  color: var(--text-muted);
+  font-weight: 600;
+  background: #f8fafc;
+}
+
+.usersTable tbody tr:hover {
+  background: #fafbfc;
+}
+
+.usersTableActions {
+  width: 130px;
+  text-align: right;
+}
+
+.usersTableActions .btn {
+  width: auto;
+  min-width: 110px;
+  height: 32px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+
+.serverStatusText {
+  font-weight: 700;
+  font-size: 16px;
+}
+
+.managerIconActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 2px;
+}
+
+.managerIconBtn {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid #d8dee6;
+  background: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: #4b5563;
+  padding: 0;
+  transition: background var(--transition), border-color var(--transition), color var(--transition);
+}
+
+.managerIconBtn svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+.managerIconBtn:hover:not(:disabled):not(.disabled) {
+  background: #eef3f8;
+  border-color: #c5d0dc;
+}
+
+.managerIconBtnPrimary {
+  color: #1f8b4c;
+  border-color: #b9e4cb;
+  background: #f3fbf6;
+}
+
+.managerIconBtnPrimary:hover:not(:disabled):not(.disabled) {
+  background: #e7f7ed;
+  border-color: #95d7af;
+}
+
+.managerIconBtnDanger {
+  color: #c0392b;
+  border-color: #f0c3bd;
+  background: #fff7f6;
+}
+
+.managerIconBtnDanger:hover:not(:disabled):not(.disabled) {
+  background: #ffece9;
+  border-color: #e7a59c;
+}
+
+.managerIconBtn:disabled,
+.managerIconBtn.disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.managerPollHint {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.managerUpdateModal {
+  width: 420px;
+}
+
+.managerBackupModal {
+  width: 460px;
+}
+
+.managerBackupSuccessHead {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.managerBackupSuccessIcon {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: rgba(34, 150, 84, 0.12);
+  color: var(--success);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.managerBackupSuccessIcon svg {
+  width: 22px;
+  height: 22px;
+}
+
+.managerBackupTitle {
+  font-weight: 700;
+  font-size: 18px;
+  line-height: 1.25;
+  margin-bottom: 4px;
+}
+
+.managerBackupSubtitle {
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
+.managerBackupPathBox {
+  background: #f6f8fa;
+  border: 1px solid var(--border-light);
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+
+.managerBackupPathLabel {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.managerBackupPathFile {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+  word-break: break-all;
+}
+
+.managerBackupPathDir {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-muted);
+  word-break: break-all;
+}
+
+.managerBackupModal .wizardFooter {
+  margin-top: 22px;
+}
+
+.managerBackupModal .wizardFooter .btnSecondary {
+  margin-right: auto;
+}
+
+.managerUpdateResult {
+  margin-top: 8px;
+  font-size: 16px;
+  line-height: 1.45;
+}
+
+.managerUpdatePickRow {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.checkRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 14px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.checkRow input {
+  margin-top: 3px;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
 }
 
 .managerActions {
@@ -1239,6 +1544,33 @@ textarea {
   gap: 12px;
   margin-top: 16px;
   align-items: center;
+}
+
+.managerActionsCompact {
+  margin-top: 10px;
+}
+
+.managerActionsRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.managerActionsRow .managerUpdateBtn,
+.managerActionsRow .managerBackupBtn {
+  width: auto;
+  min-width: 0;
+  flex: 1 1 180px;
+}
+
+.managerUpdateBtn {
+  width: auto !important;
+  min-width: 0 !important;
+  flex: 0 0 auto !important;
+  height: 36px;
+  padding: 0 18px;
+  font-size: 14px;
 }
 
 .managerActions .btnPrimary,
@@ -1253,6 +1585,7 @@ textarea {
   display: flex;
   align-items: center;
   gap: 12px;
+  flex-wrap: wrap;
   margin-top: 12px;
   padding: 12px;
   background: #f3f6f9;
@@ -1277,7 +1610,7 @@ textarea {
 
 .serverStatusText {
   font-weight: 700;
-  font-size: 14px;
+  font-size: 16px;
 }
 
 .detailsBox {
