@@ -16,17 +16,40 @@ if ! command -v wails >/dev/null 2>&1; then
   exit 1
 fi
 
+resolve_wails_binary() {
+  local out="$1"
+  if [[ -f "$out" ]]; then
+    printf '%s\n' "$out"
+    return 0
+  fi
+  if [[ -d "$out" ]]; then
+    if [[ -f "$out/$(basename "$out")" ]]; then
+      printf '%s\n' "$out/$(basename "$out")"
+      return 0
+    fi
+    local found
+    found="$(find "$out" -maxdepth 2 -type f -perm -111 | head -n 1)"
+    if [[ -n "$found" ]]; then
+      printf '%s\n' "$found"
+      return 0
+    fi
+  fi
+  return 1
+}
+
 echo "==> Linux uninstaller (embed into installer)"
 wails build -platform linux/amd64 -tags "cyberstab_uninstaller" -o cyberstab-uninstaller -ldflags ""
 
-# wails кладёт результат в build/bin — копируем в uninstaller/ для //go:embed
-built="$ROOT/build/bin/cyberstab-uninstaller"
-target_dir="$ROOT/uninstaller"
-target="$target_dir/cyberstab-uninstaller"
-if [[ ! -f "$built" ]]; then
-  echo "ERROR: expected $built not found; cannot embed uninstaller."
+built_out="$ROOT/build/bin/cyberstab-uninstaller"
+built="$(resolve_wails_binary "$built_out" || true)"
+if [[ -z "${built:-}" || ! -f "$built" ]]; then
+  echo "ERROR: expected uninstaller binary under $built_out"
+  ls -la "$ROOT/build/bin" || true
   exit 1
 fi
+
+target_dir="$ROOT/uninstaller"
+target="$target_dir/linux-uninstaller.bin"
 mkdir -p "$target_dir"
 cp -f "$built" "$target"
 

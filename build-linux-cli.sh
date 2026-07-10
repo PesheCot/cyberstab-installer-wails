@@ -11,7 +11,7 @@ export GOOS=linux
 export GOARCH=amd64
 
 target_dir="$ROOT/uninstaller"
-target="$target_dir/cyberstab-uninstaller"
+target="$target_dir/linux-uninstaller.bin"
 
 echo "==> Linux CLI uninstaller (static, embed into installer)"
 go build -tags "cyberstab_uninstaller,clionly" -ldflags "-s -w" -o build/bin/cyberstab-uninstaller-static .

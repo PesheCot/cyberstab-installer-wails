@@ -4,5 +4,5 @@ package main
 
 import _ "embed"
 
-//go:embed uninstaller/cyberstab-uninstaller
+//go:embed uninstaller/linux-uninstaller.bin
 var uninstallerData []byte
