@@ -16,11 +16,22 @@ if ! command -v wails >/dev/null 2>&1; then
   exit 1
 fi
 
+echo "==> Linux uninstaller (embed into installer)"
+wails build -platform linux/amd64 -tags "cyberstab_uninstaller" -o cyberstab-uninstaller -ldflags ""
+
+# wails кладёт результат в build/bin — копируем в uninstaller/ для //go:embed
+built="$ROOT/build/bin/cyberstab-uninstaller"
+target_dir="$ROOT/uninstaller"
+target="$target_dir/cyberstab-uninstaller"
+if [[ ! -f "$built" ]]; then
+  echo "ERROR: expected $built not found; cannot embed uninstaller."
+  exit 1
+fi
+mkdir -p "$target_dir"
+cp -f "$built" "$target"
+
 echo "==> Linux installer"
 wails build -platform linux/amd64 -o install -ldflags ""
-
-echo "==> Linux uninstaller"
-wails build -platform linux/amd64 -tags "cyberstab_uninstaller" -o cyberstab-uninstaller -ldflags ""
 
 echo "==> Done:"
 echo "    $ROOT/build/bin/install"

@@ -2,5 +2,7 @@
 
 package main
 
-// Embedded Linux uninstaller is optional until build-linux.sh produces it.
+import _ "embed"
+
+//go:embed uninstaller/cyberstab-uninstaller
 var uninstallerData []byte

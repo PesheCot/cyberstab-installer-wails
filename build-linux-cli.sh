@@ -10,11 +10,16 @@ export CGO_ENABLED=0
 export GOOS=linux
 export GOARCH=amd64
 
+target_dir="$ROOT/uninstaller"
+target="$target_dir/cyberstab-uninstaller"
+
+echo "==> Linux CLI uninstaller (static, embed into installer)"
+go build -tags "cyberstab_uninstaller,clionly" -ldflags "-s -w" -o build/bin/cyberstab-uninstaller-static .
+mkdir -p "$target_dir"
+cp -f build/bin/cyberstab-uninstaller-static "$target"
+
 echo "==> Linux CLI installer (static, any distro)"
 go build -tags "clionly" -ldflags "-s -w" -o build/bin/install-linux-static .
-
-echo "==> Linux CLI uninstaller (static)"
-go build -tags "cyberstab_uninstaller,clionly" -ldflags "-s -w" -o build/bin/cyberstab-uninstaller-static .
 
 echo "==> Done:"
 echo "    $ROOT/build/bin/install-linux-static"
