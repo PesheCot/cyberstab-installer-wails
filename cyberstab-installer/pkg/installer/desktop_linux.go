@@ -140,21 +140,16 @@ func linuxDesktopDirs(home string) []string {
 }
 
 func findClientIcon(clientDir string) string {
-	var hits []string
-	_ = filepath.WalkDir(clientDir, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d == nil || d.IsDir() {
-			return nil
+	// Canonical path in distro: CyberstabClientLinux64/client/data/icons/cyberstab.png
+	for _, rel := range []string{
+		filepath.Join("client", "data", "icons", "cyberstab.png"),
+		filepath.Join("client", "data", "icons", "cyberstab.svg"),
+		filepath.Join("client", "data", "icons", "cyberstab.xpm"),
+	} {
+		p := filepath.Join(clientDir, rel)
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			return p
 		}
-		lower := strings.ToLower(d.Name())
-		if strings.HasSuffix(lower, ".png") || strings.HasSuffix(lower, ".svg") || strings.HasSuffix(lower, ".xpm") {
-			if strings.Contains(lower, "cyberstab") || strings.Contains(lower, "icon") || strings.Contains(lower, "logo") {
-				hits = append(hits, path)
-			}
-		}
-		return nil
-	})
-	if len(hits) > 0 {
-		return hits[0]
 	}
 	return ""
 }
