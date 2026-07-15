@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import cyberstabLogo from "../assets/cyberstab-logo.svg";
+import userAgreementText from "../assets/user_agreement.txt?raw";
 
 type StepInfo = {
   Index: number;
@@ -39,6 +40,7 @@ function cls(...parts: Array<string | false | undefined>) {
 
 const STAGE_SECTIONS = [
   "Что установить",
+  "Лицензионное соглашение",
   "СУБД",
   "Папка установки",
   "Дистрибутив",
@@ -46,7 +48,7 @@ const STAGE_SECTIONS = [
   "Запуск",
 ] as const;
 
-const TOTAL_VISIBLE_STEPS = 5;
+const TOTAL_VISIBLE_STEPS = 6;
 
 function osLabel(os?: string) {
   if (os === "windows") return "Windows";
@@ -119,7 +121,8 @@ const RadioRow: React.FC<{
 
 export const App: React.FC = () => {
   const [info, setInfo] = useState<AppInfo | null>(null);
-  const [stage, setStage] = useState<0 | 1 | 2 | 3 | 4 | 5>(0);
+  const [stage, setStage] = useState<0 | 1 | 2 | 3 | 4 | 5 | 6>(0);
+  const [licenseAccepted, setLicenseAccepted] = useState(false);
   const [installServer, setInstallServer] = useState(true);
   const [installClients, setInstallClients] = useState(true);
   const [installDB, setInstallDB] = useState(false);
@@ -247,9 +250,9 @@ export const App: React.FC = () => {
     });
   }, []);
 
-  // Check DB engine availability when entering stage 1.
+  // Check DB engine availability when entering DBMS stage.
   useEffect(() => {
-    if (stage !== 1) return;
+    if (stage !== 2) return;
     (async () => {
       try {
         const result = await window.go.main.App.CheckDbInstalled();
@@ -308,9 +311,9 @@ export const App: React.FC = () => {
     })();
   }, [installServer, installClients, installDB]);
 
-  // Auto-detect USB distro when entering step 4 (distro selection).
+  // Auto-detect USB distro when entering distro selection step.
   useEffect(() => {
-    if (stage !== 3) return;
+    if (stage !== 4) return;
     (async () => {
       try {
         const p = await window.go.main.App.AutoDetectSourceRoot(installServer || installDB, installClients);
@@ -321,9 +324,9 @@ export const App: React.FC = () => {
     })();
   }, [stage]);
 
-  // Check okidoci_db when entering DB step (stage 4).
+  // Check okidoci_db when entering DB step.
   useEffect(() => {
-    if (stage !== 4) return;
+    if (stage !== 5) return;
     if (!needsPG) return;
     setDbChecking(true);
     (async () => {
@@ -516,25 +519,28 @@ export const App: React.FC = () => {
       return installServer || installClients || installDB;
     }
     if (stage === 1) {
+      return licenseAccepted;
+    }
+    if (stage === 2) {
       if (!needsPG) return true;
       if (!dbInstalled) return false;
       if (pgInstalling) return false;
       if (dbEngines.length > 1 && !dbEngineKind) return false;
       return pgUser.trim().length > 0 && pgPass.trim().length > 0;
     }
-    if (stage === 2) {
+    if (stage === 3) {
       if (info?.os !== "windows") return true;
       return installDir.trim().length > 0;
     }
-    if (stage === 3) return sourceRoot.trim().length > 0;
-    if (stage === 4) {
+    if (stage === 4) return sourceRoot.trim().length > 0;
+    if (stage === 5) {
       if (!needsPG) return true;
       if (dbChecking) return false;
       if (dbAction === "restore" && restoreSqlPath.trim().length === 0) return false;
       return true;
     }
     return true;
-  }, [stage, installServer, installClients, installDB, needsPG, pgUser, pgPass, info?.os, installDir, sourceRoot, dbAction, restoreSqlPath, dbChecking, usbChecking, dbInstalled, pgInstalling, dbEngines.length, dbEngineKind]);
+  }, [stage, installServer, installClients, installDB, licenseAccepted, needsPG, pgUser, pgPass, info?.os, installDir, sourceRoot, dbAction, restoreSqlPath, dbChecking, usbChecking, dbInstalled, pgInstalling, dbEngines.length, dbEngineKind]);
 
   const onCancel = async () => {
     if (closing) return;
@@ -601,8 +607,8 @@ export const App: React.FC = () => {
       return;
     }
 
-    // Stage 1: verify credentials against selected DB engine.
-    if (stage === 1 && needsPG && dbInstalled) {
+    // Stage 2: verify credentials against selected DB engine.
+    if (stage === 2 && needsPG && dbInstalled) {
       setPgVerifying(true);
       try {
         if (dbEngineBinDir) {
@@ -614,7 +620,7 @@ export const App: React.FC = () => {
         setPgVerified(true);
         setPgVerifyError("");
         setPgVerifying(false);
-        setStage((s) => (s < 5 ? ((s + 1) as any) : s));
+        setStage((s) => (s < 6 ? ((s + 1) as any) : s));
       } catch (_e: any) {
         setPgVerified(false);
         setPgVerifying(false);
@@ -623,7 +629,7 @@ export const App: React.FC = () => {
         return;
       }
     } else {
-      setStage((s) => (s < 5 ? ((s + 1) as any) : s));
+      setStage((s) => (s < 6 ? ((s + 1) as any) : s));
     }
   };
 
@@ -674,7 +680,7 @@ export const App: React.FC = () => {
   const showInstallDone = installDone || previewDone;
   const progressLayout = running || showInstallDone;
   const compactStageLayout = !running && !showInstallDone && stage === 0;
-  const isFinalInstallStep = stage === 4;
+  const isFinalInstallStep = stage === 5;
   const nextDisabled = uiLocked || !canNext || (isFinalInstallStep && !readyToStart);
   const previewSteps = buildInstallStepsPreview(true, "new", true).map((s) => ({ ...s, IsDone: true }));
   const visibleSteps = previewDone && steps.length === 0 ? previewSteps : steps;
@@ -821,6 +827,23 @@ export const App: React.FC = () => {
                 )}
 
                 {stage === 1 && (
+                  <>
+                    <div className="licenseScroll" tabIndex={0}>
+                      <pre className="licenseText">{userAgreementText}</pre>
+                    </div>
+                    <label className="checkRow licenseAcceptRow">
+                      <input
+                        type="checkbox"
+                        checked={licenseAccepted}
+                        onChange={(e) => setLicenseAccepted(e.target.checked)}
+                        disabled={uiLocked}
+                      />
+                      <span>Принимаю условия лицензионного соглашения</span>
+                    </label>
+                  </>
+                )}
+
+                {stage === 2 && (
                   <>
                     {!needsPG ? (
                       <p className="wizardHint">Сервер/БД не выбран — шаг СУБД будет пропущен.</p>
@@ -990,7 +1013,7 @@ export const App: React.FC = () => {
                   </>
                 )}
 
-                {stage === 2 && (
+                {stage === 3 && (
                   <>
                     {info?.os === "windows" ? (
                       <>
@@ -1014,7 +1037,7 @@ export const App: React.FC = () => {
                   </>
                 )}
 
-                {stage === 3 && (
+                {stage === 4 && (
                   <>
                     <p className="wizardHint">
                       Выберите родительскую папку, где лежат папки CyberstabServer* / CyberstabClient*.
@@ -1034,7 +1057,7 @@ export const App: React.FC = () => {
                   </>
                 )}
 
-                {stage === 4 && (
+                {stage === 5 && (
                   <>
                     {!needsPG ? (
                       <p className="wizardHint">Сервер/БД не выбран — настройка БД пропущена.</p>
@@ -1107,7 +1130,7 @@ export const App: React.FC = () => {
                   </>
                 )}
 
-                {stage === 5 && (
+                {stage === 6 && (
                   <>
                     <p className="wizardHint">Проверьте параметры и нажмите «Начать установку».</p>
                     <div className="wizardHeadActions">
@@ -1126,7 +1149,7 @@ export const App: React.FC = () => {
                   </>
                 )}
 
-                {stage !== 1 && errorText && !running && (
+                {stage !== 2 && errorText && !running && (
                   <p className="wizardHint wizardHintError" style={{ marginTop: 12 }}>{errorText}</p>
                 )}
               </div>

@@ -93,6 +93,7 @@ export const ServerManagerApp: React.FC = () => {
   const sessions = info?.sessions ?? [];
   const sessionCount = info?.sessionCount ?? sessions.length;
   const isRunning = !!info?.status?.running;
+  const isStatusUnknown = !info?.status;
 
   const refresh = async (opts?: { silent?: boolean }) => {
     if (pollInFlight.current) return;
@@ -434,11 +435,11 @@ export const ServerManagerApp: React.FC = () => {
                     {!isRunning ? (
                       <button
                         type="button"
-                        className={cls("managerIconBtn", "managerIconBtnPrimary", busy && "disabled")}
+                        className={cls("managerIconBtn", "managerIconBtnPrimary", (busy || isStatusUnknown) && "disabled")}
                         onClick={onStart}
-                        disabled={busy}
-                        title="Запустить сервер"
-                        aria-label="Запустить сервер"
+                        disabled={busy || isStatusUnknown}
+                        title={isStatusUnknown ? "Определение статуса сервера…" : "Запустить сервер"}
+                        aria-label={isStatusUnknown ? "Определение статуса сервера" : "Запустить сервер"}
                       >
                         <IconPlay />
                       </button>

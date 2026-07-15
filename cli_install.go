@@ -21,6 +21,22 @@ func runCLIInstall(app *App) error {
 	}
 	cliSummaryLine("Компоненты", componentModeLabel(installServer, installClients, installDB))
 
+	printCLISection("Лицензионное соглашение")
+	cliHint("Лицензионный договор-оферта на программный комплекс «Киберстаб».")
+	agreementPath, err := materializeUserAgreementFile()
+	if err != nil {
+		return fmt.Errorf("не удалось подготовить текст соглашения: %w", err)
+	}
+	cliSummaryLine("Полный текст", agreementPath)
+	accepted, err := promptConfirm("Принимаете условия лицензионного соглашения?", false)
+	if err != nil {
+		return err
+	}
+	if !accepted {
+		cliHint("Установка отменена: условия лицензии не приняты.")
+		return nil
+	}
+
 	needsPG := installServer || installDB
 	wantServerOrDB := installServer || installDB
 

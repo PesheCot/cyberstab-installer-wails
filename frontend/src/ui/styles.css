@@ -318,6 +318,39 @@ textarea {
   color: var(--success);
 }
 
+.licenseScroll {
+  height: 220px;
+  max-height: min(220px, 40vh);
+  overflow: auto;
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  background: #f7f9fb;
+  padding: 12px 14px;
+}
+
+.licenseScroll::-webkit-scrollbar {
+  width: 8px;
+}
+
+.licenseScroll::-webkit-scrollbar-thumb {
+  background: #c5ced8;
+  border-radius: var(--radius-pill);
+}
+
+.licenseText {
+  margin: 0;
+  font-family: "Golos Text", system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-primary);
+}
+
+.licenseAcceptRow {
+  margin-top: 14px;
+}
+
 .wizardDivider {
   height: 1px;
   background: var(--border-light);
